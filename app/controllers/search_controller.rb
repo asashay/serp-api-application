@@ -38,6 +38,7 @@ class SearchController < ActionController::API
     payload = GoogleSearch::Response.new(query: query, request_id: request.request_id, elapsed_ms: elapsed_ms)
       .call(html, source: source)
     Rails.logger.info { "search outcome=ok source=#{source} elapsed_ms=#{payload.fetch(:elapsed_ms)}" }
+    payload = { response: payload, preview_html: GoogleSearch::Preview.new.call(html) } if preview
     render json: payload
     response.set_header("X-Search-Response", "1") if action_name == "parse"
   end
