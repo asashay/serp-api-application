@@ -1,0 +1,17 @@
+/.bundle/
+/vendor/bundle/
+/node_modules/
+/public/assets/
+/tmp/*
+!/tmp/.keep
+/log/*
+!/log/.keep
+/.wrangler/
+/.env*
+!/.env.example
+/.dev.vars*
+/config/master.key
+/coverage/
+/test-results/
+/playwright-report/
+.DS_Store
