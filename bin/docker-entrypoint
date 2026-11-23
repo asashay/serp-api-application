@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+# This process serves public stateless routes and has no persistent signed state.
+if [ -z "${SECRET_KEY_BASE:-}" ]; then
+  SECRET_KEY_BASE="$(ruby -rsecurerandom -e 'puts SecureRandom.hex(64)')"
+  export SECRET_KEY_BASE
+fi
+
+exec "$@"

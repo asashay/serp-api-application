@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+bundle exec rubocop --cache false
+bundle exec brakeman --no-pager --quiet
+bundle exec bundler-audit check --update
+npm audit --audit-level=high
+
+bin/rails zeitwerk:check
+bin/rails test
+npm run test:worker
+npm run test:browser
