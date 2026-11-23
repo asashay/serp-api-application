@@ -39,6 +39,7 @@ class SearchController < ActionController::API
       .call(html, source: source)
     Rails.logger.info { "search outcome=ok source=#{source} elapsed_ms=#{payload.fetch(:elapsed_ms)}" }
     render json: payload
+    response.set_header("X-Search-Response", "1") if action_name == "parse"
   end
 
   def set_response_headers
@@ -58,5 +59,6 @@ class SearchController < ActionController::API
 
   def render_error(code, message, status)
     render json: { error: { code: code, message: message }, request_id: request.request_id }, status: status
+    response.set_header("X-Search-Response", "1") if action_name == "parse"
   end
 end

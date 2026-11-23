@@ -61,7 +61,8 @@ export async function handleSearch(request, url, env) {
       headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
       body: JSON.stringify({ query, html, preview: !isPublic, elapsed_ms: Date.now() - startedAt }),
     }))
-    if (!upstream.headers.get("Content-Type")?.startsWith("application/json")) {
+    if (upstream.headers.get("X-Search-Response") !== "1" ||
+        !upstream.headers.get("Content-Type")?.startsWith("application/json")) {
       await upstream.body?.cancel()
       return fail("search_unavailable", "The search API is temporarily unavailable.", 503)
     }

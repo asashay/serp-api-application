@@ -60,4 +60,9 @@ class GoogleSearchParserTest < Minitest::Test
     unknown = assert_raises(GoogleSearch::Error) { @parser.call('<div id="rso"></div>') }
     assert_equal :unknown_layout, unknown.code
   end
+
+  def test_rejects_markup_deeper_than_nokogiri_supports
+    error = assert_raises(GoogleSearch::Error) { @parser.call("<div>" * 600 + "</div>" * 600) }
+    assert_equal :unknown_layout, error.code
+  end
 end

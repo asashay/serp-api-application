@@ -36,7 +36,7 @@ test("shares one slot between public and playground routes", async () => {
       const payload = await request.json()
       assert.equal(payload.html, "<main>Google results</main>")
       assert.equal(payload.preview, true)
-      return Response.json({ organic_results: [] })
+      return Response.json({ organic_results: [] }, { headers: { "X-Search-Response": "1" } })
     } }) },
   }
 
@@ -57,4 +57,20 @@ test("shares one slot between public and playground routes", async () => {
   assert.equal(denied.headers.get("access-control-allow-origin"), "*")
   assert.equal(denied.headers.get("cache-control"), "no-store")
   assert.equal(fetched, 1)
+})
+
+test("normalizes framework errors to the public JSON error contract", async () => {
+  const url = new URL("https://example.com/search.json?q=rails")
+  const env = {
+    SEARCH_GATE: { getByName: () => ({ reserve: () => 0 }) },
+    BROWSER: { quickAction: () => new Response("<main>Results</main>") },
+    RAILS: { getByName: () => ({ fetch: () => Response.json({
+      status: 500, error: "Internal Server Error",
+    }, { status: 500 }) }) },
+  }
+  const response = await handleSearch(new Request(url), url, env)
+  const body = await response.json()
+  assert.equal(response.status, 503)
+  assert.equal(body.error.code, "search_unavailable")
+  assert.equal(body.request_id, response.headers.get("x-request-id"))
 })

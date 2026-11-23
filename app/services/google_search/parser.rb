@@ -7,7 +7,7 @@ module GoogleSearch
     Result = Data.define(:position, :title, :link, :snippet)
 
     def call(html)
-      page = Nokogiri::HTML5(html)
+      page = parse_document(html)
       raise Error.new(:upstream_challenge) if challenge?(page)
 
       results = organic_results(page)
@@ -17,6 +17,12 @@ module GoogleSearch
     end
 
     private
+
+    def parse_document(html)
+      Nokogiri::HTML5(html)
+    rescue ArgumentError
+      raise Error.new(:unknown_layout)
+    end
 
     def organic_results(page)
       results = []
