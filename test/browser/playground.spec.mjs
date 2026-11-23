@@ -48,7 +48,7 @@ test("uses one response for both panes and keeps it when a new request is denied
     if (requests === 1) {
       await route.fulfill({ status: 429, headers: { "Retry-After": "1" }, json: {} })
     } else if (requests === 2) {
-      await route.fulfill({ status: 200, json: {
+      await route.fulfill({ status: 200, headers: { "X-Search-Cooldown-Ms": "2000" }, json: {
         response: {
           query: "coffee & tea", elapsed_ms: 881, source: "google",
           organic_results: [{ position: 1, title: "Live result", link: "https://example.org", snippet: null }],
@@ -70,6 +70,7 @@ test("uses one response for both panes and keeps it when a new request is denied
   await expect(page.frameLocator("iframe").getByRole("heading", { name: "Live result" })).toBeVisible()
   await expect(page.getByLabel("Search response JSON")).toContainText("Live result")
   await expect(page.getByText("1 organic result · 881 ms")).toBeVisible()
+  await expect(page.getByText("Retry in 2s.", { exact: true })).toBeVisible()
 
   await expect(search).toBeEnabled({ timeout: 12_000 })
   await search.click()

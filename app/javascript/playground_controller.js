@@ -40,7 +40,6 @@ export default class extends Controller {
     }
 
     const request = new AbortController()
-    const startedAt = Date.now()
     this.request = request
     this.notice = "Fetching Google results…"
     this.renderStatus()
@@ -49,6 +48,8 @@ export default class extends Controller {
     try {
       const params = new URLSearchParams({ q: query })
       const response = await fetch(`/playground/search?${params}`, { signal: request.signal })
+      const cooldownMs = Number(response.headers.get("X-Search-Cooldown-Ms"))
+      const availableAt = Date.now() + cooldownMs
       const result = await response.json()
 
       if (response.status === 429) {
@@ -58,16 +59,14 @@ export default class extends Controller {
       }
       if (!response.ok) {
         this.notice = result.error?.message || "Live search is temporarily unavailable."
-        if (result.error?.code?.startsWith("upstream_") || result.error?.code === "unknown_layout") {
-          this.startCooldown(startedAt + 10_000, true)
-        }
-        this.renderStatus({ error: true })
+        if (cooldownMs > 0) this.startCooldown(availableAt, true)
+        else this.renderStatus({ error: true })
         return
       }
 
       this.showResult(result)
       this.notice = ""
-      if (result.response.source === "google") this.startCooldown(startedAt + 10_000)
+      if (cooldownMs > 0) this.startCooldown(availableAt)
       else this.renderStatus()
     } catch (error) {
       if (error.name === "AbortError") return

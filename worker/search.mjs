@@ -17,10 +17,13 @@ export function parseQuery(searchParams) {
 // one event turn, so another request cannot reserve between them.
 export function reserveSearchSlot(storage, now) {
   const nextSearchAt = storage.get("nextSearchAt") ?? 0
-  if (now < nextSearchAt) return Math.ceil((nextSearchAt - now) / 1000)
+  if (now < nextSearchAt) {
+    return { retryAfter: Math.ceil((nextSearchAt - now) / 1000), nextSearchAt }
+  }
 
-  storage.put("nextSearchAt", now + SEARCH_INTERVAL_MS)
-  return 0
+  const reservedUntil = now + SEARCH_INTERVAL_MS
+  storage.put("nextSearchAt", reservedUntil)
+  return { retryAfter: 0, nextSearchAt: reservedUntil }
 }
 
 export async function handleSearch(request, url, env) {
@@ -36,10 +39,16 @@ export async function handleSearch(request, url, env) {
     }
   }
 
-  const fail = (code, message, status) => Response.json(
-    { error: { code, message }, request_id: requestId },
-    { status, headers },
-  )
+  let nextSearchAt
+  const includeCountdown = () => {
+    if (!isPublic && nextSearchAt) {
+      headers.set("X-Search-Cooldown-Ms", String(Math.max(0, nextSearchAt - Date.now())))
+    }
+  }
+  const fail = (code, message, status) => {
+    includeCountdown()
+    return Response.json({ error: { code, message }, request_id: requestId }, { status, headers })
+  }
   if (request.method !== "GET") {
     headers.set("Allow", isPublic ? "GET, OPTIONS" : "GET")
     return fail("method_not_allowed", "Use GET to run a search.", 405)
@@ -49,7 +58,9 @@ export async function handleSearch(request, url, env) {
 
   const startedAt = Date.now()
   try {
-    const retryAfter = await env.SEARCH_GATE.getByName("global").reserve()
+    const reservation = await env.SEARCH_GATE.getByName("global").reserve()
+    const { retryAfter } = reservation
+    nextSearchAt = reservation.nextSearchAt
     if (retryAfter > 0) {
       headers.set("Retry-After", String(retryAfter))
       return fail("rate_limited", "The demo allows one live search every 10 seconds.", 429)
@@ -68,6 +79,7 @@ export async function handleSearch(request, url, env) {
     }
 
     headers.set("Content-Type", "application/json; charset=utf-8")
+    includeCountdown()
     return new Response(upstream.body, { status: upstream.status, headers })
   } catch (error) {
     const elapsed_ms = Date.now() - startedAt

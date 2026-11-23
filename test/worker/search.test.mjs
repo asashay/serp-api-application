@@ -12,7 +12,7 @@ test("validates and decodes exactly one query parameter", () => {
 test("reserves exactly one search across concurrent calls and allows retry at expiry", async () => {
   const storage = new Map()
   storage.put = storage.set.bind(storage)
-  const reserve = async (now) => reserveSearchSlot(storage, now)
+  const reserve = async (now) => reserveSearchSlot(storage, now).retryAfter
   assert.deepEqual(await Promise.all([reserve(1000), reserve(1000)]), [0, 10])
   assert.equal(await reserve(10999), 1)
   assert.equal(await reserve(11000), 0)
@@ -25,7 +25,7 @@ test("shares one slot between public and playground routes", async () => {
   const env = {
     SEARCH_GATE: { getByName(name) {
       assert.equal(name, "global")
-      return { reserve: () => reserveSearchSlot(storage, 1000) }
+      return { reserve: () => reserveSearchSlot(storage, Date.now()) }
     } },
     BROWSER: { quickAction() {
       fetched += 1
@@ -51,6 +51,7 @@ test("shares one slot between public and playground routes", async () => {
     send("/playground/search?q=rails"), send("/search.json?q=rails"),
   ])
   assert.equal(accepted.status, 200)
+  assert.ok(Number(accepted.headers.get("x-search-cooldown-ms")) > 0)
   assert.deepEqual(await accepted.json(), { organic_results: [] })
   assert.equal(denied.status, 429)
   assert.equal(denied.headers.get("retry-after"), "10")
@@ -62,7 +63,7 @@ test("shares one slot between public and playground routes", async () => {
 test("normalizes framework errors to the public JSON error contract", async () => {
   const url = new URL("https://example.com/search.json?q=rails")
   const env = {
-    SEARCH_GATE: { getByName: () => ({ reserve: () => 0 }) },
+    SEARCH_GATE: { getByName: () => ({ reserve: () => ({ retryAfter: 0, nextSearchAt: Date.now() + 10_000 }) }) },
     BROWSER: { quickAction: () => new Response("<main>Results</main>") },
     RAILS: { getByName: () => ({ fetch: () => Response.json({
       status: 500, error: "Internal Server Error",
