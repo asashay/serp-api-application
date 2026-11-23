@@ -19,10 +19,11 @@ class GoogleSearchParserTest < Minitest::Test
   def test_unwraps_google_redirects_and_ignores_duplicates_and_non_web_links
     html = <<~HTML
       <div id="rso">
-        <a href="/url?q=https%3A%2F%2Fexample.com%2Fpage"><h3>First      result</h3></a>
-        <a href="https://example.com/page"><h3>Duplicate</h3></a>
-        <a href="javascript:void(0)"><h3>Invalid</h3></a>
-        <a href="https://example.org/"><h3>Second result</h3></a>
+        <div class="MjjYud"><a href="https://example.net/"><h3>News module</h3></a></div>
+        <div class="g"><a href="/url?q=https%3A%2F%2Fexample.com%2Fpage"><h3>First      result</h3></a></div>
+        <div class="g"><a href="https://example.com/page"><h3>Duplicate</h3></a></div>
+        <div class="g"><a href="javascript:void(0)"><h3>Invalid</h3></a></div>
+        <div class="g"><a href="https://example.org/"><h3>Second result</h3></a></div>
       </div>
     HTML
     results = @parser.call(html)
@@ -32,7 +33,7 @@ class GoogleSearchParserTest < Minitest::Test
   end
 
   def test_limits_organic_results_to_ten
-    cards = (1..11).map { |rank| %(<a href="https://example.com/#{rank}"><h3>Result #{rank}</h3></a>) }
+    cards = (1..11).map { |rank| %(<div class="g"><a href="https://example.com/#{rank}"><h3>Result #{rank}</h3></a></div>) }
     results = @parser.call(%(<div id="rso">#{cards.join}</div>))
     assert_equal 10, results.size
     assert_equal "Result 10", results.last.title
@@ -40,6 +41,16 @@ class GoogleSearchParserTest < Minitest::Test
 
   def test_recognizes_genuine_zero_results
     assert_empty @parser.call('<div id="topstuff">Your search did not match any documents.</div>')
+    assert_empty @parser.call('<div id="topstuff"></div><div id="search">No results found.</div>')
+  end
+
+  def test_a_result_that_mentions_a_challenge_is_still_a_result
+    html = <<~HTML
+      <div id="rso"><div class="g"><a href="https://example.com/">
+        <h3>Our systems have detected unusual traffic</h3>
+      </a></div></div>
+    HTML
+    assert_equal 1, @parser.call(html).length
   end
 
   def test_distinguishes_a_google_challenge_from_unknown_markup

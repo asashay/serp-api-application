@@ -23,6 +23,9 @@ test("accepts the Browser Run response envelope", async () => {
 test("distinguishes timeout, challenge and service failure", async () => {
   const request = (response) => fetchGoogleHtml({ quickAction: () => response }, "rails")
   await assert.rejects(request(new Response(null, { status: 504 })), { code: "upstream_timeout" })
+  await assert.rejects(request(Response.json({ errors: [{ message: "Navigation timeout exceeded" }] }, {
+    status: 422,
+  })), { code: "upstream_timeout" })
   await assert.rejects(request(new Response(null, {
     status: 422, headers: { "x-browser-rendering-target-status": "429" },
   })), { code: "upstream_challenge" })

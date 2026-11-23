@@ -27,10 +27,10 @@ module GoogleSearch
         link = result_url(anchor["href"])
         next if title.empty? || !link || seen[link]
 
+        next unless anchor.ancestors("div.g, div.yuRUbf, div.Gx5Zad, div[data-snhf]").any?
+
         seen[link] = true
-        card = anchor.ancestors.find do |node|
-          node.matches?("div.g, div.MjjYud, div.Gx5Zad, div[data-snhf]")
-        end
+        card = anchor.ancestors("div.g, div.MjjYud, div.Gx5Zad, div[data-snhf]").first
         snippet = normalize(card&.at_css(".VwiC3b, [data-sncf], .IsZvec, .st")&.text.to_s)
         results << Result.new(results.length + 1, title, link, snippet.empty? ? nil : snippet)
         break if results.length == LIMIT
@@ -39,13 +39,13 @@ module GoogleSearch
     end
 
     def challenge?(page)
-      page.at_css('form#captcha-form, form[action*="/sorry/"], iframe[src*="/recaptcha/"]') ||
-        page.text.include?("Our systems have detected unusual traffic")
+      page.at_css('form#captcha-form, form[action*="/sorry/"], iframe[src*="/recaptcha/"]')
     end
 
     def no_results?(page)
-      message = page.at_css("#topstuff, #search")&.text.to_s
-      message.match?(/did not match any documents|no results found/i)
+      page.css("#topstuff, #search").any? do |node|
+        node.text.match?(/did not match any documents|no results found/i)
+      end
     end
 
     def result_url(href)

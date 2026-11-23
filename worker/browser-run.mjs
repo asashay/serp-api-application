@@ -28,18 +28,28 @@ export async function fetchGoogleHtml(browser, query) {
   if (response.headers.get("x-browser-rendering-target-status") === "429") {
     throw new BrowserRunError("upstream_challenge", 502, "Google returned a challenge page.")
   }
+  if (response.status === 422) {
+    const failure = parseJson(await readBounded(response))
+    if (Array.isArray(failure?.errors) && failure.errors.some((error) =>
+      typeof error?.message === "string" && /timeout|timed out/i.test(error.message))) {
+      throw new BrowserRunError("upstream_timeout", 504, "Google results took too long to load.")
+    }
+  }
   if (!response.ok) throw unavailable()
 
   const body = await readBounded(response)
   if (!body.trim()) throw unavailable()
   if (response.headers.get("Content-Type")?.includes("application/json")) {
-    let payload
-    try { payload = JSON.parse(body) } catch { throw unavailable() }
+    const payload = parseJson(body)
     if (payload?.success && typeof payload.result === "string" && payload.result.trim()) return payload.result
     throw unavailable()
   }
   if (!body.trimStart().startsWith("<")) throw unavailable()
   return body
+}
+
+function parseJson(body) {
+  try { return JSON.parse(body) } catch { return null }
 }
 
 async function readBounded(response) {
