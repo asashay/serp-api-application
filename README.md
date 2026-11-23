@@ -90,7 +90,7 @@ Errors include `error.code`, `error.message`, and `request_id`.
 
 ## Deploy
 
-Authenticate Wrangler for a Workers Paid account with a Cloudflare zone for the configured hostname. Keep Docker running, install dependencies with `npm ci`, then run `npm run deploy`. Wrangler builds the Rails image, declares the Browser Run binding and SQLite-backed Durable Objects, and attaches the custom domain. Update the custom domain and Rails production host allowlist together if deploying under another hostname.
+Authenticate Wrangler for a Workers Paid account with a Cloudflare zone for the configured hostname. With Docker and Docker Buildx available, install dependencies with `npm ci` and run `npm run deploy`. Wrangler builds the Rails image, declares the Browser Run binding and SQLite-backed Durable Objects, and attaches the custom domain. When deploying to another hostname, update the custom domain and `PUBLIC_ORIGIN` in `wrangler.jsonc`. Rails uses that origin for its host allowlist and request examples.
 
 The container uses a per-process Rails secret for its stateless routes and sleeps after one minute of inactivity. The browser binding runs in the Worker, so the container needs no Internet access. Use the request ID to correlate Rails logs with the public response. The app does not add raw queries or captured HTML to its search logs.
 

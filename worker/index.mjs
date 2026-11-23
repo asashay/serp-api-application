@@ -25,9 +25,9 @@ export class RailsContainer extends DurableObject {
     if (!container.running) {
       container.start({
         image: container.images.base,
-        instance: "basic",
+        instance: { vcpu: 0.25, memoryMib: 1024, diskMb: 4000 },
         enableInternet: false,
-        env: { CLOUDFLARE_CONTAINER: "1" },
+        env: { CLOUDFLARE_CONTAINER: "1", PUBLIC_ORIGIN: this.env.PUBLIC_ORIGIN },
       })
     }
     await container.setInactivityTimeout(60_000)

@@ -1,3 +1,5 @@
+require "uri"
+
 Rails.application.configure do
   config.enable_reloading = false
   config.eager_load = true
@@ -8,7 +10,7 @@ Rails.application.configure do
   config.log_tags = [ :request_id ]
 
   if ENV["CLOUDFLARE_CONTAINER"] == "1"
-    config.hosts << "serp-api-demo.alexoliynyk.me"
+    config.hosts << URI(ENV.fetch("PUBLIC_ORIGIN")).host
     config.hosts << "rails.internal"
   end
 end
