@@ -1,20 +1,31 @@
 <header class="site-header">
   <div class="shell masthead">
-    <a class="brand" href="/" aria-label="Search Lab home"><span class="brand-mark" aria-hidden="true">&lt;/&gt;</span> Search Lab</a>
+    <nav class="nav-box" aria-label="Site">
+      <a class="brand" href="/" aria-label="Search Lab home"><span class="brand-mark" aria-hidden="true">&lt;/&gt;</span> Search Lab</a>
+      <a class="nav-link" href="#integration-title"><span class="nav-square" aria-hidden="true"></span>API</a>
+    </nav>
     <a class="source-link" href="https://github.com/asashay/serp-api-application">GitHub source</a>
   </div>
 </header>
 
 <main class="shell" data-controller="playground" data-playground-origin-value="<%= @api_origin %>">
   <section class="hero" aria-labelledby="page-title">
-    <h1 id="page-title">Google Search API</h1>
-    <p class="intro">Enter a LingoRep page path, such as /, to fetch it through the live renderer and see the structured JSON.</p>
+    <p class="eyebrow">Live Google results &rarr; structured JSON</p>
+    <h1 id="page-title">Google <em>Search</em> API</h1>
+    <p class="intro">Enter a search query to fetch Google results through the live renderer and see the structured JSON.</p>
 
     <form action="/search.json" method="get" class="search-form" data-action="submit->playground#search">
       <label for="query">Search query</label>
       <div class="search-row">
         <input id="query" name="q" type="search" value="<%= @query %>" required maxlength="400"
           autocomplete="off" data-playground-target="query" data-action="input->playground#updateIntegration">
+        <select name="location" aria-label="Location" data-playground-target="location"
+          data-action="change->playground#updateIntegration">
+          <option value="">Any location</option>
+          <% GoogleSearch::Location.names.each do |name| %>
+            <option value="<%= name %>" <%= "selected" if name == @location %>><%= name.split(", ").values_at(0, -1).join(", ") %></option>
+          <% end %>
+        </select>
         <button class="primary" type="submit" data-playground-target="submit">Run search</button>
       </div>
       <div class="form-status" role="status" aria-live="polite" data-playground-target="status"></div>
@@ -25,23 +36,52 @@
     <div class="comparison-header">
       <div class="response-status" aria-live="polite">
         <span class="response-tag" data-playground-target="source">Saved example</span>
-        <span class="response-details" data-playground-target="summary"><%= pluralize(@sample.fetch(:headings).length, "heading") %></span>
+        <span class="response-details" data-playground-target="summary"><%= pluralize(@sample.fetch(:organic_results).length, "organic result") %></span>
       </div>
     </div>
 
-    <section class="panel json-panel" aria-labelledby="heading-json">
-      <header class="panel-header">
-        <h2 id="heading-json">API response</h2>
-        <button class="text-button" type="button" data-action="playground#copyJson">Copy JSON</button>
-      </header>
-      <pre tabindex="0" aria-label="Search response JSON"><code data-playground-target="json"><%= JSON.pretty_generate(@sample) %></code></pre>
-    </section>
+    <div class="comparison-panels">
+      <section class="panel page-panel" aria-labelledby="heading-page" data-playground-target="pagePanel">
+        <header class="panel-header">
+          <span class="window-square" aria-hidden="true"></span>
+          <h2 id="heading-page">Results page</h2>
+          <span class="window-stripes" aria-hidden="true"></span>
+          <span class="panel-note">Links disabled</span>
+        </header>
+        <%# sandbox="" blocks scripts, forms, popups and navigation; the page carries its own CSP. %>
+        <iframe class="page-frame" sandbox="" referrerpolicy="no-referrer" title="Captured results page, links disabled"
+          srcdoc="<%= @preview_html %>" data-playground-target="page"></iframe>
+        <p class="page-empty" data-playground-target="pageEmpty" hidden>No page preview for this response.</p>
+        <div class="page-loading" role="status" aria-label="Rendering Google results" data-playground-target="pageLoading" hidden>
+          <%# A fixed scatter of start times, so the pixels fill in out of order. %>
+          <div class="raster" aria-hidden="true"><% 96.times do |cell| %><i style="--delay: <%= format("%.3f", (cell * 37 % 96) / 96.0 * 2.4) %>s"></i><% end %></div>
+          <p class="loading-title">Rendering Google results</p>
+          <div class="loading-bar" aria-hidden="true"><% 12.times do |cell| %><i style="--cell: <%= cell %>"></i><% end %></div>
+          <p class="loading-meta">
+            <span>Firefox &middot; residential proxy</span>
+            <%# Updated every second; kept out of the live region so it is not read aloud. %>
+            <span class="loading-elapsed" aria-hidden="true" data-playground-target="elapsed">00:00</span>
+          </p>
+        </div>
+      </section>
+
+      <section class="panel json-panel" aria-labelledby="heading-json">
+        <header class="panel-header">
+          <span class="window-square" aria-hidden="true"></span>
+          <h2 id="heading-json">API response</h2>
+          <span class="window-stripes" aria-hidden="true"></span>
+          <button class="text-button" type="button" data-action="playground#copyJson">Copy JSON</button>
+        </header>
+        <pre tabindex="0" aria-label="Search response JSON"><code data-playground-target="json"><%= JSON.pretty_generate(@sample) %></code></pre>
+      </section>
+    </div>
   </section>
 
   <section class="integration" aria-labelledby="integration-title">
     <header class="integration-header">
       <div>
-        <h2 id="integration-title">Use the API</h2>
+        <p class="eyebrow">Integrate</p>
+        <h2 id="integration-title">Use the <em>API</em></h2>
         <p>One live search every 10–15 seconds and 400 per month, shared across the demo.</p>
       </div>
       <a class="quiet-link" href="/example.json">Saved JSON</a>

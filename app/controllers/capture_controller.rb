@@ -1,12 +1,18 @@
 class CaptureController < ActionController::API
   before_action :set_response_headers
-  rescue_from PageCapture::Renderer::Error, with: :render_capture_error
+  rescue_from PageCapture::Renderer::Error, GoogleSearch::Error, with: :render_search_error
 
   def show
-    url = PageCapture::Path.url(GoogleSearch::Query.parse(request.query_string))
-    return invalid_path unless url
+    query, location_name = GoogleSearch::Query.parse(request.query_string)
+    return invalid_query unless query
+    location = GoogleSearch::Location.find(location_name) if location_name
+    return invalid_location if location_name && !location
     return render_error("live_search_unavailable", "Use the Cloudflare Worker to run a live search.", 503) if deployed?
-    return render_error("fixture_query_unavailable", "The local fixture is available for /.", 422) unless url == "#{PageCapture::Path::ORIGIN}/"
+    return render_live(query, location) if local_live_search?
+    unless query == GoogleSearch::Example::QUERY && [ nil, GoogleSearch::Example.location ].include?(location)
+      return render_error("fixture_query_unavailable",
+        "The local fixture is available for #{GoogleSearch::Example::QUERY} in #{GoogleSearch::Example::LOCATION}.", 422)
+    end
 
     render_example
   end
@@ -18,15 +24,12 @@ class CaptureController < ActionController::API
   def capture
     return head :not_found unless deployed?
 
-    url = PageCapture::Path.url(params[:path])
-    return invalid_path unless url
+    query = GoogleSearch::Query.normalize(params[:query])
+    return invalid_query unless query
+    location = GoogleSearch::Location.find(params[:location]) unless params[:location].nil?
+    return invalid_location if !params[:location].nil? && !location
 
-    started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    final_url, html = PageCapture::Renderer.new.call(url)
-    document = PageCapture::Document.new(html)
-    elapsed_ms = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000
-    render_document(document, url: final_url, source: "lingorep",
-      elapsed_ms: params[:elapsed_ms].to_i + elapsed_ms.round)
+    render_live(query, location, queued_ms: params[:elapsed_ms].to_i)
   end
 
   def health
@@ -41,15 +44,43 @@ class CaptureController < ActionController::API
     ENV["CLOUDFLARE_CONTAINER"] == "1"
   end
 
-  def render_example
-    render_document(PageCapture::Document.example, url: "#{PageCapture::Path::ORIGIN}/", source: "fixture",
-      elapsed_ms: 0)
+  # Lets a local run (for example the production image under Docker) send
+  # searches through its own renderer. There is no Worker quota gate here.
+  def local_live_search?
+    ENV["LOCAL_LIVE_SEARCH"] == "1"
   end
 
-  def render_document(document, url:, source:, elapsed_ms:)
-    payload = document.response(url: url, source: source, request_id: request.request_id, elapsed_ms: elapsed_ms)
+  def render_live(query, location, queued_ms: 0)
+    started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    _final_url, html = PageCapture::Renderer.new.call(GoogleSearch::Query.url(query, location: location),
+      location: location&.name)
+    elapsed_ms = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000
+    render_capture(html, query: query, location: location, source: "google", elapsed_ms: queued_ms + elapsed_ms.round)
+  end
+
+  def render_example
+    render_capture(GoogleSearch::Example.html, query: GoogleSearch::Example::QUERY,
+      location: GoogleSearch::Example.location, source: "fixture")
+  end
+
+  def render_capture(html, query:, source:, location: nil, elapsed_ms: 0)
+    payload = GoogleSearch::Response.new(query: query, location: location, request_id: request.request_id,
+      elapsed_ms: elapsed_ms)
+      .call(html, source: source)
+    Rails.logger.info { "search outcome=ok source=#{source} elapsed_ms=#{payload.fetch(:elapsed_ms)}" }
+    payload[:preview_html] = GoogleSearch::Preview.new(html).call if preview?
     response.set_header("X-Search-Response", "1") if action_name == "capture"
     render json: payload
+  end
+
+  # The playground shows a sanitized copy of the page next to the JSON. The
+  # public API never includes it; in production the Worker says which is which.
+  def preview?
+    if action_name == "capture"
+      params[:preview] == true
+    else
+      request.path == "/playground/search"
+    end
   end
 
   def set_response_headers
@@ -60,12 +91,16 @@ class CaptureController < ActionController::API
     end
   end
 
-  def invalid_path
-    render_error("invalid_query", "Enter a LingoRep page path (1 to 200 characters).", 400)
+  def invalid_query
+    render_error("invalid_query", "Provide one search query (1 to 200 characters).", 400)
   end
 
-  def render_capture_error(error)
-    Rails.logger.info { "capture outcome=#{error.code}" }
+  def invalid_location
+    render_error("invalid_location", "Use one of these locations: #{GoogleSearch::Location.names.join('; ')}.", 400)
+  end
+
+  def render_search_error(error)
+    Rails.logger.info { "search outcome=#{error.code}" }
     render_error(error.code, error.message, error.status)
   end
 

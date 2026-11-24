@@ -1,0 +1,4 @@
+[
+  { "name": "Austin, Texas, United States", "gl": "us", "canonical": "Austin,Texas,United States", "proxy": "cr.us;city.austin" },
+  { "name": "Paris, Ile-de-France, France", "gl": "fr", "canonical": "Paris,Ile-de-France,France", "proxy": "cr.fr;city.paris" }
+]

@@ -5,6 +5,7 @@ const tokenPattern = /"(?:\\.|[^"\\])*"(?=\s*:)|"(?:\\.|[^"\\])*"|\b(?:true|fals
 export default class extends Controller {
   static targets = [
     "query", "submit", "status", "comparison", "source", "summary", "json", "url", "open", "copyStatus",
+    "page", "pageEmpty", "location", "pagePanel", "pageLoading", "elapsed",
   ]
 
   static values = { origin: String }
@@ -19,6 +20,7 @@ export default class extends Controller {
   disconnect() {
     this.request?.abort()
     clearInterval(this.timer)
+    clearInterval(this.elapsedTimer)
     clearTimeout(this.copyTimer)
   }
 
@@ -35,12 +37,13 @@ export default class extends Controller {
 
     const request = new AbortController()
     this.request = request
-    this.notice = "Fetching the page…"
+    this.notice = "Fetching Google results…"
     this.renderStatus()
     this.comparisonTarget.setAttribute("aria-busy", "true")
+    this.showLoading(true)
 
     try {
-      const params = new URLSearchParams({ q: query })
+      const params = this.searchParams(query)
       const response = await fetch(`/playground/search?${params}`, { signal: request.signal })
       const cooldownMs = Number(response.headers.get("X-Search-Cooldown-Ms"))
       const availableAt = Date.now() + cooldownMs
@@ -69,23 +72,50 @@ export default class extends Controller {
     } finally {
       this.request = null
       if (this.element.isConnected) {
+        this.showLoading(false)
         this.comparisonTarget.removeAttribute("aria-busy")
         this.updateButton()
       }
     }
   }
 
-  showResult(response) {
-    const live = response.source === "lingorep"
-    const count = response.headings.length
+  showResult(result) {
+    // The page preview is playground-only, so the JSON pane shows the API response without it.
+    const { preview_html: previewHtml, ...response } = result
+    const live = response.source === "google"
+    const count = response.organic_results.length
+    this.showPage(previewHtml)
     this.highlightJson(JSON.stringify(response, null, 2))
     this.jsonTarget.parentElement.scrollTo(0, 0)
     this.sourceTarget.textContent = live ? "Live response" : "Saved example"
     this.sourceTarget.toggleAttribute("data-live", live)
     this.summaryTarget.textContent = [
-      `${count} heading${count === 1 ? "" : "s"}`,
+      `${count} organic result${count === 1 ? "" : "s"}`,
       live ? `${response.elapsed_ms} ms` : null,
     ].filter(Boolean).join(" · ")
+  }
+
+  // The results panel shows a loader with the elapsed time while a search runs;
+  // a failed search brings the previous page back.
+  showLoading(loading) {
+    clearInterval(this.elapsedTimer)
+    this.pagePanelTarget.toggleAttribute("data-loading", loading)
+    this.pageLoadingTarget.hidden = !loading
+    if (!loading) return
+
+    const startedAt = Date.now()
+    const tick = () => {
+      const seconds = Math.floor((Date.now() - startedAt) / 1000)
+      this.elapsedTarget.textContent = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`
+    }
+    tick()
+    this.elapsedTimer = setInterval(tick, 250)
+  }
+
+  showPage(html) {
+    this.pageTarget.srcdoc = html || ""
+    this.pageTarget.hidden = !html
+    this.pageEmptyTarget.hidden = Boolean(html)
   }
 
   highlightJson(json) {
@@ -127,9 +157,16 @@ export default class extends Controller {
     this.submitTarget.textContent = this.request ? "Searching…" : "Run search"
   }
 
+  // q, plus location when one is chosen ("Any location" sends none).
+  searchParams(query) {
+    const params = new URLSearchParams({ q: query })
+    if (this.locationTarget.value) params.set("location", this.locationTarget.value)
+    return params
+  }
+
   updateIntegration() {
     const url = new URL("/search.json", this.originValue)
-    url.search = new URLSearchParams({ q: this.queryTarget.value.trim() }).toString()
+    url.search = this.searchParams(this.queryTarget.value.trim()).toString()
     this.urlTarget.textContent = url.href
     this.openTarget.href = url.href
   }

@@ -10,7 +10,7 @@ Bundler.require(*Rails.groups)
 module SerpApiDemo
   class Application < Rails::Application
     config.load_defaults 8.1
-    config.filter_parameters += [ :q, :html, :path ]
+    config.filter_parameters += [ :q, :query, :html ]
     config.action_dispatch.default_headers.merge!("Referrer-Policy" => "no-referrer")
   end
 end

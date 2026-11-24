@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { capturePath, handleSearch, parseQuery, reserveSearchSlot } from "../../worker/search.mjs"
+import { handleSearch, LOCATIONS, parseLocation, parseQuery, reserveSearchSlot } from "../../worker/search.mjs"
 
 function storage() {
   const map = new Map()
@@ -10,18 +10,46 @@ function storage() {
 
 test("validates and decodes exactly one query parameter", () => {
   assert.equal(parseQuery(new URLSearchParams("q=coffee+%26+tea")), "coffee & tea")
+  assert.equal(parseQuery(new URLSearchParams({ q: "https://example.com/" })), "https://example.com/")
   for (const query of ["", "q=++", "q=1&q=2", "q=rails&foo=bar", "q=%00", "q=%ff", "q=" + "a".repeat(201)]) {
     assert.equal(parseQuery(new URLSearchParams(query)), null, query)
   }
 })
 
-test("accepts a path and rejects destinations and traversal", () => {
-  for (const path of ["/", "blog/coffee & tea", "/docs/getting started"]) {
-    assert.equal(capturePath(new URLSearchParams({ q: path })), path)
+test("accepts one optional location from the shared list", () => {
+  assert.equal(LOCATIONS.length, 2)
+  assert.ok(LOCATIONS.includes("Austin, Texas, United States"))
+  assert.equal(parseQuery(new URLSearchParams("q=matcha&location=Austin%2C+Texas%2C+United+States")), "matcha")
+  assert.equal(parseQuery(new URLSearchParams("q=matcha&location=a&location=b")), null)
+  assert.equal(parseLocation(new URLSearchParams("q=matcha")), undefined)
+  assert.equal(parseLocation(new URLSearchParams({ q: "matcha", location: "Paris, Ile-de-France, France" })),
+    "Paris, Ile-de-France, France")
+  for (const location of ["", "Austin", "austin, texas, united states", "cr.us;city.austin"]) {
+    assert.equal(parseLocation(new URLSearchParams({ q: "matcha", location })), null, location)
   }
-  for (const path of ["https://elsewhere.example/", "//elsewhere.example", "a/../b", "/./b", "%2e%2e", "a?b", "a#b", "a\\b"]) {
-    assert.equal(capturePath(new URLSearchParams({ q: path })), null, path)
-  }
+})
+
+test("rejects an unknown location before reserving and forwards a known one", async () => {
+  let reservations = 0
+  const bodies = []
+  const url = (location) => `/search.json?${new URLSearchParams({ q: "matcha", location })}`
+  const send = sender({
+    SEARCH_GATE: { getByName: () => ({ reserve: () => { reservations++; return { retryAfter: 0, nextSearchAt: Date.now() } } }) },
+    RAILS: { getByName: () => ({ async fetch(request) {
+      bodies.push(await request.json())
+      return Response.json({ organic_results: [] }, { headers: { "X-Search-Response": "1" } })
+    } }) },
+  })
+
+  const unknown = await send(url("Mars"))
+  assert.equal(unknown.status, 400)
+  assert.equal((await unknown.json()).error.code, "invalid_location")
+  assert.equal(reservations, 0)
+
+  assert.equal((await send(url("Austin, Texas, United States"))).status, 200)
+  assert.equal((await send("/search.json?q=matcha")).status, 200)
+  assert.equal(bodies[0].location, "Austin, Texas, United States")
+  assert.equal("location" in bodies[1], false)
 })
 
 test("reserves exactly one search across concurrent calls and allows retry at expiry", async () => {
@@ -72,15 +100,16 @@ test("validates before reserving and shares one slot between public and playgrou
       captures++
       assert.equal(new URL(request.url).pathname, "/internal/capture")
       const payload = await request.json()
-      assert.equal(payload.path, "blog/getting started")
-      assert.equal("preview" in payload, false)
+      assert.equal(payload.query, "blog/getting started")
+      assert.equal("path" in payload, false)
+      assert.equal(payload.preview, true)
       assert.ok(request.headers.has("X-Request-Id"))
-      return Response.json({ headings: [] }, { headers: { "X-Search-Response": "1" } })
+      return Response.json({ organic_results: [] }, { headers: { "X-Search-Response": "1" } })
     } }) },
   })
 
   assert.equal((await send("/search.json")).status, 400)
-  assert.equal((await send("/search.json?q=https%3A%2F%2Fexample.com")).status, 400)
+  assert.equal((await send("/search.json?q=rails&q=ruby")).status, 400)
   assert.equal((await send("/search.json?q=rails", "HEAD")).status, 405)
   assert.equal((await send("/search.json", "OPTIONS")).status, 204)
   assert.equal(reservations, 0)
@@ -90,12 +119,27 @@ test("validates before reserving and shares one slot between public and playgrou
   ])
   assert.equal(accepted.status, 200)
   assert.ok(Number(accepted.headers.get("x-search-cooldown-ms")) > 0)
-  assert.deepEqual(await accepted.json(), { headings: [] })
+  assert.deepEqual(await accepted.json(), { organic_results: [] })
   assert.equal(denied.status, 429)
   assert.equal(denied.headers.get("retry-after"), "10")
   assert.equal(denied.headers.get("access-control-allow-origin"), "*")
   assert.equal(denied.headers.get("cache-control"), "no-store")
   assert.equal(captures, 1)
+})
+
+test("asks Rails for a page preview only for the playground", async () => {
+  const previews = []
+  const send = sender({
+    SEARCH_GATE: { getByName: () => ({ reserve: () => ({ retryAfter: 0, nextSearchAt: Date.now() }) }) },
+    RAILS: { getByName: () => ({ async fetch(request) {
+      previews.push((await request.json()).preview)
+      return Response.json({ organic_results: [] }, { headers: { "X-Search-Response": "1" } })
+    } }) },
+  })
+
+  assert.equal((await send("/search.json?q=rails")).status, 200)
+  assert.equal((await send("/playground/search?q=rails")).status, 200)
+  assert.deepEqual(previews, [false, true])
 })
 
 test("preserves typed capture errors and normalizes framework errors", async () => {
@@ -104,11 +148,11 @@ test("preserves typed capture errors and normalizes framework errors", async () 
     RAILS: { getByName: () => ({ fetch: () => response }) },
   })("/search.json?q=missing")
 
-  const missing = await send(Response.json({ error: { code: "page_not_found" } }, {
-    status: 404, headers: { "X-Search-Response": "1" },
+  const challenge = await send(Response.json({ error: { code: "upstream_challenge" } }, {
+    status: 502, headers: { "X-Search-Response": "1" },
   }))
-  assert.equal(missing.status, 404)
-  assert.equal((await missing.json()).error.code, "page_not_found")
+  assert.equal(challenge.status, 502)
+  assert.equal((await challenge.json()).error.code, "upstream_challenge")
 
   const broken = await send(Response.json({ status: 500 }, { status: 500 }))
   const body = await broken.json()

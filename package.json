@@ -5,6 +5,7 @@
     "node": ">=24"
   },
   "scripts": {
+    "dev": "ruby bin/dev",
     "test:worker": "node --test test/worker/*.test.mjs",
     "test:browser": "playwright test",
     "deploy": "wrangler deploy",

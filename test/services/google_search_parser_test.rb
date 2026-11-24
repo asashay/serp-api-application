@@ -8,12 +8,125 @@ class GoogleSearchParserTest < Minitest::Test
   end
 
   def test_example_results_keep_source_order
-    html = File.read(File.expand_path("../fixtures/google_search/example.html", __dir__))
+    html = File.read(File.expand_path("../fixtures/google_search/example.html", __dir__), encoding: "UTF-8")
     results = @parser.call(html)
-    assert_equal [ 1, 2, 3, 4 ], results.map(&:position)
-    assert_equal "Ruby on Rails Guides", results.first.title
-    assert_equal "https://guides.rubyonrails.org/", results.first.link
-    assert_match "Documentation for Ruby on Rails", results.first.snippet
+    assert_equal (1..5).to_a, results.map(&:position)
+    assert_equal "The 9 Best Matcha in Houston | MyBestHouston", results.first.title
+    assert_equal "https://mybesthouston.com/matcha/", results.first.link
+    assert_match "The main points in one table", results.first.snippet
+  end
+
+  def test_links_keep_the_google_redirect_alongside_the_destination
+    html = <<~HTML
+      <div id="rso">
+        <div class="g"><a href="/goto?url=CAESabc"><h3>Unresolved</h3></a></div>
+        <div class="g"><a href="https://example.com/a" data-goto="https://www.google.com/goto?url=CAESdef"><h3>Resolved</h3></a></div>
+        <div class="g"><a href="https://example.com/b" data-goto="https://evil.example/goto?url=x"><h3>Bad marker</h3></a></div>
+        <div class="g"><a href="/url?q=https%3A%2F%2Fexample.com%2Fc"><h3>Old redirect</h3></a></div>
+        <div class="g"><a href="https://example.com/d"><h3>Direct</h3></a></div>
+      </div>
+    HTML
+    links = @parser.call(html).map { |result| [ result.link, result.redirect_link ] }
+    assert_equal [
+      [ "https://www.google.com/goto?url=CAESabc", "https://www.google.com/goto?url=CAESabc" ],
+      [ "https://example.com/a", "https://www.google.com/goto?url=CAESdef" ],
+      [ "https://example.com/b", nil ],
+      [ "https://example.com/c", "https://www.google.com/url?q=https%3A%2F%2Fexample.com%2Fc" ],
+      [ "https://example.com/d", nil ]
+    ], links
+  end
+
+  def test_extracts_result_details_and_omits_missing_ones
+    html = <<~HTML
+      <div id="rso">
+        <div class="MjjYud"><div class="N54PNb">
+          <div class="kb0PBd" data-snhf="0"><div class="yuRUbf">
+            <a href="https://example.com/a"><h3>First</h3></a>
+            <span class="VuuXrf">Example Site</span><cite>https://example.com › a</cite>
+            <img class="XNo5Ab" src="data:image/png;base64,AAAA">
+          </div></div>
+          <div class="kb0PBd" data-sncf="1"><div class="VwiC3b">
+            <span class="YrbPuc"><span>Mar 17, 2026</span> — </span>A <em>coffee</em> guide with <em>coffee</em> and <em>grinders</em>.
+          </div></div>
+        </div></div>
+        <div class="g"><a href="https://example.com/b"><h3>Second</h3></a></div>
+      </div>
+    HTML
+    first, second = @parser.call(html)
+    assert_equal "https://example.com › a", first.displayed_link
+    assert_equal "Example Site", first.source
+    assert_equal "data:image/png;base64,AAAA", first.favicon
+    assert_equal "Mar 17, 2026", first.date
+    assert_equal "A coffee guide with coffee and grinders.", first.snippet
+    assert_equal [ "coffee", "grinders" ], first.snippet_highlighted_words
+    assert_equal({ position: 2, title: "Second", link: "https://example.com/b", snippet: nil }, second.to_h)
+  end
+
+  def test_reads_live_layouts_with_snippets_details_and_pagination
+    expected = {
+      "goto_unresolved.html" => [ 6, 0, 25_600 ],
+      "goto_mixed.html" => [ 9, 6, 165 ],
+      "goto_mostly_unresolved.html" => [ 7, 1, 99 ]
+    }
+    expected.each do |name, (count, resolved, total)|
+      page = @parser.parse(live_fixture(name))
+      results = page.results
+      assert_equal count, results.size, name
+      assert_equal resolved, results.count { |result| result.link != result.redirect_link }, name
+      assert results.all? { |result| result.snippet && result.source && result.redirect_link }, name
+      assert results.all? { |result| result.displayed_link.nil? || result.displayed_link.start_with?("https://") }, name
+      assert results.all? { |result| result.link.start_with?("https://", "http://") }, name
+      assert_equal total, page.information[:total_results], name
+      assert_kind_of Float, page.information[:time_taken_displayed], name
+      assert_equal 1, page.pagination[:current], name
+      assert_equal (2..10).map(&:to_s), page.pagination[:other_pages].keys, name
+      assert page.pagination[:next].start_with?("https://www.google.com/search?"), name
+    end
+  end
+
+  def test_live_layout_details_for_one_result
+    page = @parser.parse(live_fixture("goto_unresolved.html"))
+    result = page.results.first
+    assert_equal "Food & Wine", result.source
+    assert_equal "6 days ago", result.date
+    assert result.snippet.start_with?("5-Star Ratings")
+    assert_equal [ "OXO Brew Conical Burr Coffee Grinder, $99" ], result.snippet_highlighted_words
+    assert result.favicon.start_with?("data:image/png;base64,")
+    assert_equal "best coffee grinder", page.information[:query_displayed]
+  end
+
+  def test_forum_cards_have_no_breadcrumb_but_keep_their_date
+    reddit = @parser.call(live_fixture("goto_unresolved.html")).find { |result| result.source == "Reddit · r/pourover" }
+    assert_nil reddit.displayed_link
+    assert_equal "1 hour ago", reddit.date
+
+    stack = @parser.call(live_fixture("goto_mixed.html")).find { |result| result.source == "Stack Overflow" }
+    assert_nil stack.displayed_link
+    assert_equal "6 years ago", stack.date
+  end
+
+  def test_splits_a_breadcrumb_and_date_cite
+    html = <<~HTML
+      <div id="rso"><div class="g"><a href="https://example.com/v"><h3>Video</h3></a>
+        <cite>https://www.youtube.com · Jan 26, 2021</cite></div></div>
+    HTML
+    result = @parser.call(html).first
+    assert_equal "https://www.youtube.com", result.displayed_link
+    assert_equal "Jan 26, 2021", result.date
+  end
+
+  def test_pagination_ignores_links_off_google_search
+    html = <<~HTML
+      <div id="rso"><div class="g"><a href="https://example.com/"><h3>Only</h3></a></div></div>
+      <div role="navigation"><table role="presentation"><tr>
+        <td>1</td>
+        <td><a aria-label="Page 2" href="/search?q=a&amp;start=10">2</a></td>
+        <td><a aria-label="Page 3" href="https://evil.example/search?q=a">3</a></td>
+        <td><a id="pnnext" href="/url?q=https://evil.example/">Next</a></td>
+      </tr></table></div>
+    HTML
+    assert_equal({ current: 1, other_pages: { "2" => "https://www.google.com/search?q=a&start=10" } },
+      @parser.parse(html).pagination)
   end
 
   def test_unwraps_google_redirects_and_ignores_duplicates_and_non_web_links
@@ -64,5 +177,13 @@ class GoogleSearchParserTest < Minitest::Test
   def test_rejects_markup_deeper_than_nokogiri_supports
     error = assert_raises(GoogleSearch::Error) { @parser.call("<div>" * 600 + "</div>" * 600) }
     assert_equal :unknown_layout, error.code
+  end
+
+  private
+
+  # Trimmed captures of real result pages: the renderer's output, reduced to
+  # the query box, result stats, #rso and pagination.
+  def live_fixture(name)
+    File.read(File.expand_path("../fixtures/google_search/live/#{name}", __dir__), encoding: "UTF-8")
   end
 end

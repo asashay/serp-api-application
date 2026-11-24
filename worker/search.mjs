@@ -1,22 +1,27 @@
+import locations from "../config/locations.json" with { type: "json" }
+
 export const PUBLIC_SEARCH = "/search.json"
+export const LOCATIONS = locations.map(({ name }) => name)
 export const PLAYGROUND_SEARCH = "/playground/search"
 const SEARCH_INTERVAL_MS = 10_000
 const MONTHLY_CAPTURE_LIMIT = 400
 
+// One q and at most one location; nothing else.
 export function parseQuery(searchParams) {
-  const pairs = [...searchParams]
-  if (pairs.length !== 1 || pairs[0][0] !== "q") return null
+  const keys = [...searchParams.keys()]
+  const count = (key) => keys.filter((name) => name === key).length
+  if (count("q") !== 1 || count("location") > 1 || keys.some((key) => key !== "q" && key !== "location")) return null
 
-  const query = pairs[0][1].replace(/^[\p{White_Space}]+|[\p{White_Space}]+$/gu, "")
+  const query = searchParams.get("q").replace(/^[\p{White_Space}]+|[\p{White_Space}]+$/gu, "")
   const length = [...query].length
   return length >= 1 && length <= 200 && !/[\p{Cc}\uFFFD]/u.test(query) ? query : null
 }
 
-export function capturePath(searchParams) {
-  const path = parseQuery(searchParams)
-  if (!path || /^(?:\/\/|[a-z][a-z\d+.-]*:)|[\\?#%]/iu.test(path)) return null
-  if (path.split("/").some((segment) => segment === "." || segment === "..")) return null
-  return path
+// undefined without a location, the name when it is one of config/locations.json, else null.
+export function parseLocation(searchParams) {
+  if (!searchParams.has("location")) return undefined
+  const location = searchParams.get("location")
+  return LOCATIONS.includes(location) ? location : null
 }
 
 // SQLite-backed Durable Object KV is synchronous. The read and write happen in
@@ -70,8 +75,10 @@ export async function handleSearch(request, url, env) {
     headers.set("Allow", isPublic ? "GET, OPTIONS" : "GET")
     return fail("method_not_allowed", "Use GET to run a search.", 405)
   }
-  const path = capturePath(url.searchParams)
-  if (!path) return fail("invalid_query", "Enter a LingoRep page path (1 to 200 characters).", 400)
+  const query = parseQuery(url.searchParams)
+  if (!query) return fail("invalid_query", "Provide one search query (1 to 200 characters).", 400)
+  const location = parseLocation(url.searchParams)
+  if (location === null) return fail("invalid_location", `Use one of these locations: ${LOCATIONS.join("; ")}.`, 400)
 
   const startedAt = Date.now()
   try {
@@ -91,7 +98,8 @@ export async function handleSearch(request, url, env) {
     const upstream = await env.RAILS.getByName("rails").fetch(new Request("http://rails.internal/internal/capture", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
-      body: JSON.stringify({ path, elapsed_ms: Date.now() - startedAt }),
+      // Only the playground shows the captured page next to the JSON.
+      body: JSON.stringify({ query, location, elapsed_ms: Date.now() - startedAt, preview: !isPublic }),
     }))
     if (upstream.headers.get("X-Search-Response") !== "1" ||
         !upstream.headers.get("Content-Type")?.startsWith("application/json")) {

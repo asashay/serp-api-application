@@ -4,6 +4,16 @@ module PageCapture
   class Renderer
     LIMIT = 5 * 1024 * 1024
     ENDPOINT = URI("http://127.0.0.1:3800")
+    # The renderer's deadline plus headroom. renderer/server.py reads
+    # RENDER_TIMEOUT_SECONDS with the same rules: finite and above 30, else 30.
+    def self.deadline(value)
+      seconds = Float(value.presence || 30)
+      seconds.finite? && seconds > 30 ? seconds : 30.0
+    rescue ArgumentError, TypeError
+      30.0
+    end
+
+    READ_TIMEOUT = deadline(ENV["RENDER_TIMEOUT_SECONDS"]) + 4
     Error = Class.new(StandardError) do
       attr_reader :code, :status
 
@@ -14,10 +24,12 @@ module PageCapture
       end
     end
 
-    def call(url)
+    # location: a name from config/locations.json; the renderer picks an exit
+    # IP there. nil uses any exit IP.
+    def call(url, location: nil)
       request = Net::HTTP::Post.new("/render", "Content-Type" => "application/json")
-      request.body = JSON.generate(url: url)
-      http(read_timeout: 34).request(request) do |response|
+      request.body = JSON.generate({ url: url, location: location }.compact)
+      http(read_timeout: READ_TIMEOUT).request(request) do |response|
         case response.code.to_i
         when 200
           html = +"".b
@@ -27,11 +39,11 @@ module PageCapture
           end
           html.force_encoding(Encoding::UTF_8)
           final_url = response["X-Page-Url"]
-          raise unavailable if html.empty? || !html.valid_encoding? || !final_url&.start_with?("#{Path::ORIGIN}/")
+          raise unavailable if html.empty? || !html.valid_encoding? || !final_url&.start_with?("#{GoogleSearch::Query::ORIGIN}/")
 
           return [ final_url, html ]
-        when 404
-          raise Error.new("page_not_found", "That page could not be found.", 404)
+        when 429
+          raise Error.new("upstream_challenge", "Google returned a challenge page.", 502)
         when 504
           raise timeout
         else
@@ -60,11 +72,11 @@ module PageCapture
     end
 
     def timeout
-      Error.new("upstream_timeout", "The page took too long to load.", 504)
+      Error.new("upstream_timeout", "Google results took too long to load.", 504)
     end
 
     def unavailable
-      Error.new("upstream_unavailable", "The page renderer is temporarily unavailable.", 503)
+      Error.new("upstream_unavailable", "Live search is temporarily unavailable.", 503)
     end
   end
 end
