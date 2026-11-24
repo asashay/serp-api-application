@@ -1,0 +1,2 @@
+aiohttp==3.14.5
+invisible-playwright==0.59.0

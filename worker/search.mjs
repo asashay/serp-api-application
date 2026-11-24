@@ -1,8 +1,7 @@
-import { BrowserRunError, fetchGoogleHtml } from "./browser-run.mjs"
-
 export const PUBLIC_SEARCH = "/search.json"
 export const PLAYGROUND_SEARCH = "/playground/search"
 const SEARCH_INTERVAL_MS = 10_000
+const MONTHLY_CAPTURE_LIMIT = 400
 
 export function parseQuery(searchParams) {
   const pairs = [...searchParams]
@@ -13,16 +12,34 @@ export function parseQuery(searchParams) {
   return length >= 1 && length <= 200 && !/[\p{Cc}\uFFFD]/u.test(query) ? query : null
 }
 
+export function capturePath(searchParams) {
+  const path = parseQuery(searchParams)
+  if (!path || /^(?:\/\/|[a-z][a-z\d+.-]*:)|[\\?#%]/iu.test(path)) return null
+  if (path.split("/").some((segment) => segment === "." || segment === "..")) return null
+  return path
+}
+
 // SQLite-backed Durable Object KV is synchronous. The read and write happen in
-// one event turn, so another request cannot reserve between them.
-export function reserveSearchSlot(storage, now) {
+// one event turn, so another request cannot reserve between them. The caller
+// may add jitter so the public cadence is not a metronome.
+export function reserveSearchSlot(storage, now, jitterMs = 0) {
+  const date = new Date(now)
+  const month = date.toISOString().slice(0, 7)
+  const previous = storage.get("captureMonth")
+  const count = previous?.month === month ? previous.count : 0
+  if (count >= MONTHLY_CAPTURE_LIMIT) {
+    const resetAt = Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1)
+    return { retryAfter: Math.ceil((resetAt - now) / 1000), resetAt }
+  }
+
   const nextSearchAt = storage.get("nextSearchAt") ?? 0
   if (now < nextSearchAt) {
     return { retryAfter: Math.ceil((nextSearchAt - now) / 1000), nextSearchAt }
   }
 
-  const reservedUntil = now + SEARCH_INTERVAL_MS
+  const reservedUntil = now + SEARCH_INTERVAL_MS + jitterMs
   storage.put("nextSearchAt", reservedUntil)
+  storage.put("captureMonth", { month, count: count + 1 })
   return { retryAfter: 0, nextSearchAt: reservedUntil }
 }
 
@@ -53,24 +70,28 @@ export async function handleSearch(request, url, env) {
     headers.set("Allow", isPublic ? "GET, OPTIONS" : "GET")
     return fail("method_not_allowed", "Use GET to run a search.", 405)
   }
-  const query = parseQuery(url.searchParams)
-  if (!query) return fail("invalid_query", "Provide one search query (1 to 200 characters).", 400)
+  const path = capturePath(url.searchParams)
+  if (!path) return fail("invalid_query", "Enter a LingoRep page path (1 to 200 characters).", 400)
 
   const startedAt = Date.now()
   try {
-    const reservation = await env.SEARCH_GATE.getByName("global").reserve()
+    const gate = env.SEARCH_GATE.getByName("global")
+    const reservation = await gate.reserve()
     const { retryAfter } = reservation
     nextSearchAt = reservation.nextSearchAt
     if (retryAfter > 0) {
       headers.set("Retry-After", String(retryAfter))
-      return fail("rate_limited", "The demo allows one live search every 10 seconds.", 429)
+      if (reservation.resetAt) {
+        const reset = new Date(reservation.resetAt).toISOString().slice(0, 10)
+        return fail("monthly_limit", `The monthly capture limit resets on ${reset} UTC.`, 429)
+      }
+      return fail("rate_limited", "The demo allows one live search about every 10 seconds.", 429)
     }
 
-    const html = await fetchGoogleHtml(env.BROWSER, query)
-    const upstream = await env.RAILS.getByName("rails").fetch(new Request("http://rails.internal/internal/search", {
+    const upstream = await env.RAILS.getByName("rails").fetch(new Request("http://rails.internal/internal/capture", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
-      body: JSON.stringify({ query, html, preview: !isPublic, elapsed_ms: Date.now() - startedAt }),
+      body: JSON.stringify({ path, elapsed_ms: Date.now() - startedAt }),
     }))
     if (upstream.headers.get("X-Search-Response") !== "1" ||
         !upstream.headers.get("Content-Type")?.startsWith("application/json")) {
@@ -83,10 +104,6 @@ export async function handleSearch(request, url, env) {
     return new Response(upstream.body, { status: upstream.status, headers })
   } catch (error) {
     const elapsed_ms = Date.now() - startedAt
-    if (error instanceof BrowserRunError) {
-      console.warn({ request_id: requestId, outcome: error.code, elapsed_ms })
-      return fail(error.code, error.message, error.status)
-    }
     console.error({ request_id: requestId, outcome: "search_unavailable", elapsed_ms, type: error?.name })
     return fail("search_unavailable", "The search API is temporarily unavailable.", 503)
   }

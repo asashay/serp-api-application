@@ -1,8 +1,9 @@
 Rails.application.routes.draw do
   root "playground#show"
   get "up" => "rails/health#show"
-  get "search.json" => "search#show", format: false, defaults: { format: :json }
-  get "playground/search" => "search#show", defaults: { format: :json, preview: true }
-  get "example.json" => "search#example", format: false, defaults: { format: :json }
-  post "internal/search" => "search#parse", defaults: { format: :json }
+  get "search.json" => "capture#show", format: false, defaults: { format: :json }
+  get "playground/search" => "capture#show", defaults: { format: :json }
+  get "example.json" => "capture#example", format: false, defaults: { format: :json }
+  post "internal/capture" => "capture#capture", defaults: { format: :json }
+  get "internal/renderer-health" => "capture#health"
 end

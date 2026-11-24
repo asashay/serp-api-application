@@ -4,8 +4,7 @@ const tokenPattern = /"(?:\\.|[^"\\])*"(?=\s*:)|"(?:\\.|[^"\\])*"|\b(?:true|fals
 
 export default class extends Controller {
   static targets = [
-    "query", "submit", "status", "comparison", "source", "summary", "preview", "json",
-    "previewLabel", "tab", "panel", "url", "open", "copyStatus",
+    "query", "submit", "status", "comparison", "source", "summary", "json", "url", "open", "copyStatus",
   ]
 
   static values = { origin: String }
@@ -13,16 +12,11 @@ export default class extends Controller {
   connect() {
     this.notice = ""
     this.countdownUntil = 0
-    this.mobile = matchMedia("(max-width: 620px)")
-    this.syncPanels = this.syncPanels.bind(this)
-    this.mobile.addEventListener("change", this.syncPanels)
-    this.syncPanels()
     this.highlightJson(this.jsonTarget.textContent.trim())
     this.updateIntegration()
   }
 
   disconnect() {
-    this.mobile.removeEventListener("change", this.syncPanels)
     this.request?.abort()
     clearInterval(this.timer)
     clearTimeout(this.copyTimer)
@@ -41,7 +35,7 @@ export default class extends Controller {
 
     const request = new AbortController()
     this.request = request
-    this.notice = "Fetching Google results…"
+    this.notice = "Fetching the page…"
     this.renderStatus()
     this.comparisonTarget.setAttribute("aria-busy", "true")
 
@@ -52,14 +46,14 @@ export default class extends Controller {
       const availableAt = Date.now() + cooldownMs
       const result = await response.json()
 
-      if (response.status === 429) {
+      if (response.status === 429 && result.error?.code !== "monthly_limit") {
         this.notice = ""
-        this.startCooldown(Date.now() + 1000 * (Number(response.headers.get("Retry-After")) || 10))
+        this.startCooldown(Date.now() + 1000 * (Number(response.headers.get("Retry-After")) || 10), { retry: true })
         return
       }
       if (!response.ok) {
         this.notice = result.error?.message || "Live search is temporarily unavailable."
-        if (cooldownMs > 0) this.startCooldown(availableAt, true)
+        if (cooldownMs > 0) this.startCooldown(availableAt, { error: true })
         else this.renderStatus({ error: true })
         return
       }
@@ -81,17 +75,15 @@ export default class extends Controller {
     }
   }
 
-  showResult({ response, preview_html: html }) {
-    const live = response.source === "google"
-    const count = response.organic_results.length
-    this.previewTarget.srcdoc = html
+  showResult(response) {
+    const live = response.source === "lingorep"
+    const count = response.headings.length
     this.highlightJson(JSON.stringify(response, null, 2))
     this.jsonTarget.parentElement.scrollTo(0, 0)
     this.sourceTarget.textContent = live ? "Live response" : "Saved example"
-    this.previewLabelTarget.textContent = live ? "Page preview" : "Fixture preview"
     this.sourceTarget.toggleAttribute("data-live", live)
     this.summaryTarget.textContent = [
-      `${count} organic result${count === 1 ? "" : "s"}`,
+      `${count} heading${count === 1 ? "" : "s"}`,
       live ? `${response.elapsed_ms} ms` : null,
     ].filter(Boolean).join(" · ")
   }
@@ -113,17 +105,17 @@ export default class extends Controller {
     this.jsonTarget.replaceChildren(fragment)
   }
 
-  startCooldown(until, error = false) {
+  startCooldown(until, options = {}) {
     clearInterval(this.timer)
     this.countdownUntil = until
-    this.timer = setInterval(() => this.renderStatus({ error }), 250)
-    this.renderStatus({ error })
+    this.timer = setInterval(() => this.renderStatus(options), 250)
+    this.renderStatus(options)
   }
 
-  renderStatus({ error = false } = {}) {
+  renderStatus({ error = false, retry = false } = {}) {
     const seconds = Math.ceil(Math.max(0, this.countdownUntil - Date.now()) / 1000)
     if (!seconds) clearInterval(this.timer)
-    const countdown = seconds ? `Retry in ${seconds}s.` : ""
+    const countdown = seconds ? `${retry ? "Retry" : "Next search"} in ${seconds}s.` : ""
     const text = [this.notice, countdown].filter(Boolean).join(" ")
     if (text !== this.statusTarget.textContent) this.statusTarget.textContent = text
     this.statusTarget.toggleAttribute("data-error", error)
@@ -140,37 +132,6 @@ export default class extends Controller {
     url.search = new URLSearchParams({ q: this.queryTarget.value.trim() }).toString()
     this.urlTarget.textContent = url.href
     this.openTarget.href = url.href
-  }
-
-  selectTab(event) {
-    this.setTab(event.currentTarget)
-  }
-
-  navigateTabs(event) {
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return
-    event.preventDefault()
-    const current = this.tabTargets.indexOf(event.target)
-    const index = { Home: 0, End: this.tabTargets.length - 1 }[event.key] ?? (current + 1) % this.tabTargets.length
-    const tab = this.tabTargets[index]
-    this.setTab(tab)
-    tab.focus()
-  }
-
-  setTab(selected) {
-    this.comparisonTarget.dataset.activeTab = selected.id === "tab-json" ? "json" : "html"
-    this.tabTargets.forEach((tab) => {
-      tab.ariaSelected = String(tab === selected)
-      tab.tabIndex = tab === selected ? 0 : -1
-    })
-  }
-
-  syncPanels() {
-    this.panelTargets.forEach((panel) => {
-      const label = panel.id.endsWith("html") ? "html" : "json"
-      panel.setAttribute("aria-labelledby", this.mobile.matches ? `tab-${label}` : `heading-${label}`)
-      if (this.mobile.matches) panel.setAttribute("role", "tabpanel")
-      else panel.removeAttribute("role")
-    })
   }
 
   copyJson(event) { return this.copy(this.rawJson, "JSON copied.", event.currentTarget) }

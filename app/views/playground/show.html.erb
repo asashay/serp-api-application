@@ -8,7 +8,7 @@
 <main class="shell" data-controller="playground" data-playground-origin-value="<%= @api_origin %>">
   <section class="hero" aria-labelledby="page-title">
     <h1 id="page-title">Google Search API</h1>
-    <p class="intro">See how a Google results page becomes structured JSON.</p>
+    <p class="intro">Enter a LingoRep page path, such as /, to fetch it through the live renderer and see the structured JSON.</p>
 
     <form action="/search.json" method="get" class="search-form" data-action="submit->playground#search">
       <label for="query">Search query</label>
@@ -25,34 +25,24 @@
     <div class="comparison-header">
       <div class="response-status" aria-live="polite">
         <span class="response-tag" data-playground-target="source">Saved example</span>
-        <span class="response-details" data-playground-target="summary"><%= pluralize(@sample.fetch(:organic_results).length, "organic result") %></span>
-      </div>
-      <div class="tab-list" role="tablist" aria-label="Response format" data-action="keydown->playground#navigateTabs">
-        <button id="tab-html" type="button" role="tab" aria-controls="panel-html" aria-selected="true" data-playground-target="tab" data-action="playground#selectTab">HTML</button>
-        <button id="tab-json" type="button" role="tab" aria-controls="panel-json" aria-selected="false" tabindex="-1" data-playground-target="tab" data-action="playground#selectTab">JSON</button>
+        <span class="response-details" data-playground-target="summary"><%= pluralize(@sample.fetch(:headings).length, "heading") %></span>
       </div>
     </div>
 
-    <div class="panes">
-      <section id="panel-html" class="panel html-panel" data-playground-target="panel" aria-labelledby="heading-html">
-        <header class="panel-header"><h2 id="heading-html">Google HTML</h2><span data-playground-target="previewLabel">Fixture preview</span></header>
-        <%= tag.iframe title: "Sanitized Google results preview", sandbox: "", srcdoc: @preview, data: { playground_target: "preview" } %>
-      </section>
-      <section id="panel-json" class="panel json-panel" data-playground-target="panel" aria-labelledby="heading-json">
-        <header class="panel-header">
-          <h2 id="heading-json">API response</h2>
-          <button class="text-button" type="button" data-action="playground#copyJson">Copy JSON</button>
-        </header>
-        <pre tabindex="0" aria-label="Search response JSON"><code data-playground-target="json"><%= JSON.pretty_generate(@sample) %></code></pre>
-      </section>
-    </div>
+    <section class="panel json-panel" aria-labelledby="heading-json">
+      <header class="panel-header">
+        <h2 id="heading-json">API response</h2>
+        <button class="text-button" type="button" data-action="playground#copyJson">Copy JSON</button>
+      </header>
+      <pre tabindex="0" aria-label="Search response JSON"><code data-playground-target="json"><%= JSON.pretty_generate(@sample) %></code></pre>
+    </section>
   </section>
 
   <section class="integration" aria-labelledby="integration-title">
     <header class="integration-header">
       <div>
         <h2 id="integration-title">Use the API</h2>
-        <p>One live search every 10 seconds, shared across the demo.</p>
+        <p>One live search every 10–15 seconds and 400 per month, shared across the demo.</p>
       </div>
       <a class="quiet-link" href="/example.json">Saved JSON</a>
     </header>

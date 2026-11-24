@@ -9,4 +9,5 @@ npm audit --audit-level=high
 bin/rails zeitwerk:check
 bin/rails test
 npm run test:worker
+python3 -B -m unittest discover -s test/renderer -p '*_test.py'
 npm run test:browser

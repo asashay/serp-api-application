@@ -1,11 +1,14 @@
 {
   "name": "serp-api-demo",
   "private": true,
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "test:worker": "node --test test/worker/*.test.mjs",
     "test:browser": "playwright test",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "deploy:worker": "wrangler deploy --containers-rollout=none"
   },
   "devDependencies": {
     "@playwright/test": "1.65.1",

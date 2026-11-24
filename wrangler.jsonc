@@ -8,8 +8,11 @@
   "routes": [
     { "pattern": "serp-api-demo.alexoliynyk.me", "custom_domain": true }
   ],
-  "vars": { "PUBLIC_ORIGIN": "https://serp-api-demo.alexoliynyk.me" },
-  "browser": { "binding": "BROWSER" },
+  "vars": {
+    "PUBLIC_ORIGIN": "https://serp-api-demo.alexoliynyk.me",
+    "RENDERER_CONFIG_VERSION": "2"
+  },
+  "triggers": { "crons": [ "*/5 * * * *" ] },
   "observability": {
     "enabled": true,
     "logs": { "enabled": true, "invocation_logs": false }

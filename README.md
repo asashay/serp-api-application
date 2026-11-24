@@ -1,97 +1,88 @@
 # Search Lab
 
-Search Lab is a Rails playground for comparing a Google results page with the JSON a Nokogiri parser extracts from it. Open the playground to inspect **Ruby on Rails guides** without consuming a search slot. [Hosted playground](https://serp-api-demo.alexoliynyk.me/)
+Search Lab shows how a rendered web page becomes structured JSON. The playground keeps its Google Search API labels. Enter a path such as `/` or `blog/my-post` to capture the corresponding LingoRep page. The starting example is a saved homepage capture and uses no live slot. [Hosted playground](https://serp-api-demo.alexoliynyk.me/)
 
 ```sh
 curl -sS 'https://serp-api-demo.alexoliynyk.me/example.json'
-curl -i 'https://serp-api-demo.alexoliynyk.me/search.json?q=Ruby+on+Rails+guides'
+curl -i 'https://serp-api-demo.alexoliynyk.me/search.json?q=%2F'
 ```
 
-The first command returns the labeled saved example. The second sends a live search. Google returned challenge pages on the three initial Browser Run checks. If that happens, the API returns `502 upstream_challenge` and the playground keeps the last successful HTML and JSON visible. The bundled example uses a small representative HTML fixture.
+## Architecture
 
-## Review the code
+Every live request follows one path:
 
-1. Follow [the Rails routes](config/routes.rb) and [search controller](app/controllers/search_controller.rb) to see how the API builds its response.
-2. Read [the Nokogiri parser](app/services/google_search/parser.rb) beside [the HTML fixture](test/fixtures/google_search/example.html) and [parser tests](test/services/google_search_parser_test.rb). The parser requires explicit zero-results markup before returning an empty list. Otherwise an unrecognized page produces `unknown_layout`.
-3. Read [the Worker](worker/search.mjs) and [cooldown tests](test/worker/search.test.mjs). One named Durable Object stores the next allowed search time, so the window survives container restarts and applies across visitors.
-4. See [the preview sanitizer](app/services/google_search/preview.rb) and [browser tests](test/browser/playground.spec.mjs) for the HTML and JSON comparison flow.
-
-```mermaid
-flowchart LR
-    client["Playground or API client"] --> worker["Cloudflare Worker"]
-    worker --> gate["Durable Object · shared cooldown"]
-    gate -->|Slot granted| browser["Browser Run · rendered Google HTML"]
-    gate -->|Too early| rejected["429 · Retry-After"]
-    browser --> rails["Rails container · Nokogiri parser"]
-    rails --> json["Public JSON"]
-    rails --> preview["Playground · JSON and isolated HTML"]
+```text
+Browser or API client
+  │  GET /search.json?q=…  or  GET /playground/search?q=…
+  ▼
+Cloudflare Worker (worker/)                 validates the path, reserves an attempt
+  │  SearchGate Durable Object              10–15 s cooldown + 400 captures per UTC month
+  ▼
+Cloudflare Container, 1 GiB, linux/amd64    one instance, kept warm
+  ├─ Rails / Puma :3000 (app/)              builds the URL, parses the HTML, returns JSON
+  │     │  POST http://127.0.0.1:3800/render
+  │     ▼
+  └─ Python renderer :3800 (renderer/)      warm Invisible Playwright Firefox
+        │  fresh browser context per capture
+        ▼
+     Local CONNECT proxy :3801              only allows lingorep.com:443
+        │  authenticated CONNECT
+        ▼
+     DataImpulse Premium gateway  ──►  https://lingorep.com/<path>
 ```
 
-The Worker also forwards the homepage and saved example to Rails without reserving a slot. One live request fetches one page. Rails builds the JSON and, for the playground only, sanitizes a preview from the same response.
+| Component | Location | Responsibility |
+| --- | --- | --- |
+| Worker | `worker/index.mjs`, `worker/search.mjs` | Routes public traffic and validates `q` as a LingoRep path before spending quota. Reserves attempts through `SearchGate`. Starts the container with the proxy secrets. Runs the five-minute readiness check. |
+| SearchGate | `worker/index.mjs`, `worker/search.mjs` | One global Durable Object. Atomically enforces the cooldown and the monthly cap. |
+| Rails | `app/controllers/capture_controller.rb`, `app/services/page_capture/` | `PageCapture::Path` maps the query to `https://lingorep.com/<encoded path>`. `PageCapture::Renderer` calls the loopback renderer. `PageCapture::Document` extracts the URL, title, description, and headings. |
+| Renderer | `renderer/server.py`, `renderer/capture.js` | Keeps one Firefox process running. Runs one capture at a time with a 30-second deadline. Blocks navigation and subresources outside LingoRep. Returns the rendered DOM without scripts or styles. Caps output at 5 MiB. |
+| Proxy guard | `renderer/proxy.py` | Accepts only `CONNECT lingorep.com:443` from Firefox and forwards it to DataImpulse with the account credentials. |
+| Process supervisor | `renderer/supervisord.conf` | Runs Puma and the renderer side by side. Restarts either one if it exits. Blanks the proxy secrets for Puma. |
+| Playground | `app/views/playground/`, `app/javascript/playground_controller.js` | Search box plus a single JSON pane. Starts from a saved capture (`test/fixtures/page_capture/lingorep.html`) that uses no quota. |
+
+Design choices:
+
+- **One container.** Rails and Firefox share an instance so the renderer is reachable only over loopback. The container restarts as a unit when the image or `RENDERER_CONFIG_VERSION` changes. A freshly started container holds requests until Firefox answers its health check.
+- **Defense in depth on destinations.** The Worker, Rails, the Playwright route filter, the CONNECT guard, and the final-URL check each restrict traffic to `https://lingorep.com`.
+- **Quota is spent only on admitted attempts.** Invalid paths and rate-limited requests consume nothing. An admitted capture counts even if it fails. A capture that arrives while another is running waits within its own deadline.
+- **Logs carry no content.** Rails tags its log lines with the request ID and filters `q`, `path`, and `html`. The renderer logs only browser error codes and proxy status codes, never URLs, HTML, or credentials.
+- **Google parsing is parked.** `GoogleSearch::Parser` and its fixture and test remain under `app/services/google_search` for a future source of Google results HTML. Nothing in the live path calls it.
+
+## API
+
+`GET /search.json?q=…` accepts one LingoRep path from 1 to 200 characters after trimming. Use `/` for the homepage. The API returns `url`, `title`, `description`, `headings`, `request_id`, `elapsed_ms`, and `source`. Each heading has a numeric `level` and `text`. The live source is `lingorep`. The saved example uses `fixture`.
+
+The public API and playground share a 10–15 second cooldown and 400 admitted captures per UTC calendar month. Failed captures use their reserved attempt. Error responses include `error.code`, `error.message`, and `request_id`. A missing LingoRep page returns 404. Rate and monthly limits return 429 with `Retry-After`. The renderer has a 30-second deadline and a 5 MiB output limit.
 
 ## Run locally
 
-A Docker build needs no Cloudflare credentials.
-
-```sh
-docker build -t serp-api-demo .
-docker run --rm -p 3000:3000 serp-api-demo
-```
-
-Open [the local playground](http://localhost:3000/) or call `curl 'http://localhost:3000/search.json?q=Ruby+on+Rails+guides'`. Local mode serves that fixture query. Other queries get a fixture-mode error.
-
-For development and checks, install the Ruby version in `.ruby-version` and Node 24.
+Install the Ruby version in `.ruby-version`, Node 24, and Python 3.11 or later.
 
 ```sh
 bundle install
 npm ci
 npx playwright install chromium
 bin/ci
+bin/rails server
 ```
 
-`bin/ci` runs style checks, Rails static analysis, dependency audits, and the Ruby, Worker, and browser tests. For parser tests alone, run `bundle exec ruby test/services/google_search_parser_test.rb`. The automated suites use fixtures and mocked upstream requests.
+Open [the local playground](http://localhost:3000/). Local Rails serves the saved example for `/`. The automated suites use fixtures and mocked upstream requests. The production image targets Linux x86-64.
 
-## API contract
-
-`GET /search.json` accepts one UTF-8 `q` parameter with 1–200 characters after trimming. Callers can make cross-origin GET requests and read `Retry-After` and `X-Request-Id`. The route requires no credentials. Live responses carry `Cache-Control: no-store`.
-
-A shortened example response follows.
-
-```json
-{
-  "query": "Ruby on Rails guides",
-  "organic_results": [
-    {
-      "position": 1,
-      "title": "Ruby on Rails Guides",
-      "link": "https://guides.rubyonrails.org/",
-      "snippet": "Documentation for Ruby on Rails, from getting started to deploying an application."
-    }
-  ],
-  "request_id": "example-request",
-  "elapsed_ms": 0,
-  "source": "fixture"
-}
+```sh
+docker buildx build --platform linux/amd64 --load -t serp-api-demo .
+docker run --rm --platform linux/amd64 -p 3000:3000 serp-api-demo
 ```
-
-A live response has `source: "google"` and up to ten first-page organic results. The snippet may be `null`. All searches share one slot every ten seconds. A failed upstream attempt still uses its slot.
-
-| HTTP | Error code | Meaning |
-| --- | --- | --- |
-| 400 | `invalid_query` | Supply one valid query. |
-| 405 | `method_not_allowed` | Use GET. |
-| 429 | `rate_limited` | Wait for `Retry-After` seconds. |
-| 502 | `upstream_challenge` | Google returned a challenge page. |
-| 502 | `unknown_layout` | The parser could not recognize the page. |
-| 503 | `upstream_unavailable`, `search_unavailable` | The upstream service or Rails container was unavailable. |
-| 504 | `upstream_timeout` | Browser Run exceeded its navigation deadline. |
-
-Errors include `error.code`, `error.message`, and `request_id`.
 
 ## Deploy
 
-Authenticate Wrangler for a Workers Paid account with a Cloudflare zone for the configured hostname. With Docker and Docker Buildx available, install dependencies with `npm ci` and run `npm run deploy`. Wrangler builds the Rails image, declares the Browser Run binding and SQLite-backed Durable Objects, and attaches the custom domain. When deploying to another hostname, update the custom domain and `PUBLIC_ORIGIN` in `wrangler.jsonc`. Rails uses that origin for its host allowlist and request examples.
+Authenticate Wrangler for the Workers Paid account and configure the three secrets with `wrangler secret put`. Use the proxy gateway, username, and password from the DataImpulse Premium dashboard.
 
-The container uses a per-process Rails secret for its stateless routes and sleeps after one minute of inactivity. The browser binding runs in the Worker, so the container needs no Internet access. Use the request ID to correlate Rails logs with the public response. The app does not add raw queries or captured HTML to its search logs.
+- `DATAIMPULSE_SERVER` is the HTTP(S) proxy gateway URL, including its port.
+- `DATAIMPULSE_USERNAME` and `DATAIMPULSE_PASSWORD` are the proxy credentials.
+
+Run `bin/ci`, then publish the container image and Worker with `npm run deploy`. A Worker-only deploy is available with `npm run deploy:worker` when the container image is unchanged. Update the custom domain and `PUBLIC_ORIGIN` in Wrangler when deploying to a different hostname.
+
+Puma and Firefox share one 1 GiB Cloudflare Container. A five-minute scheduled check keeps the container active with its 15-minute idle timeout and checks the local Firefox connection. The Worker replaces the running container when the image changes. After rotating proxy secrets, increment `RENDERER_CONFIG_VERSION` and deploy the Worker to restart the container with the new credentials. Correlate requests by `X-Request-Id` and check combined memory in Cloudflare container metrics after a live capture.
 
 Font licenses for [Inter](vendor/licenses/inter.txt) and [IBM Plex Mono](vendor/licenses/ibm-plex-mono.txt) are included.
