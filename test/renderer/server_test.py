@@ -41,6 +41,7 @@ except ImportError:
     stand_in("invisible_playwright._pw.async_api", Error=BrowserError,
              TimeoutError=type("TimeoutError", (BrowserError,), {}))
 
+import attempts  # noqa: E402
 import links  # noqa: E402
 import server  # noqa: E402
 
@@ -54,8 +55,13 @@ class GoogleResponse:
 
 
 class Locator:
+    def __init__(self, page):
+        self.page = page
+
     async def count(self):
-        return 0
+        # A late challenge is not there when the HTML is parsed, only later.
+        self.page.challenge_checks += 1
+        return int(getattr(self.page.load, "late_challenge", False) and self.page.challenge_checks > 1)
 
 
 class Page:
@@ -63,6 +69,7 @@ class Page:
         self.load = load
         self.url = URL
         self.waits = []
+        self.challenge_checks = 0
 
     async def goto(self, url, wait_until, timeout):
         self.waits.append((wait_until, timeout))
@@ -74,7 +81,7 @@ class Page:
             raise server.BrowserTimeout("Timeout exceeded")
 
     def locator(self, _selector):
-        return Locator()
+        return Locator(self)
 
     async def evaluate(self, script, *_args):
         if script == server.CAPTURE:
@@ -190,10 +197,18 @@ class RenderTest(unittest.IsolatedAsyncioTestCase):
         self.assertRegex(line(lines, "render"), r"^render outcome=ok .* attempts=2 ")
 
     async def test_times_out_when_every_exit_ip_is_slow(self):
-        response, lines = await self.render(slow, slow, slow)
+        response, lines = await self.render(*[slow] * attempts.MAX_ATTEMPTS)
 
         self.assertEqual(response.status, 504)
-        self.assertRegex(line(lines, "render"), r"^render outcome=slow .* attempts=3 ")
+        self.assertRegex(line(lines, "render"), rf"^render outcome=slow .* attempts={attempts.MAX_ATTEMPTS} ")
+
+    async def test_retries_a_challenge_that_appears_after_the_html(self):
+        response, lines = await self.render(status(200, late_challenge=True), status(200))
+
+        self.assertEqual(response.status, 200)
+        self.assertRegex(line(lines, "attempt 1"), r"^attempt 1 outcome=challenge .*challenge_at=capture ")
+        self.assertNotIn("stopped_in", line(lines, "attempt 1"))
+        self.assertRegex(line(lines, "attempt 2"), r"^attempt 2 outcome=ok ")
 
     async def test_names_the_step_a_timeout_interrupted(self):
         response, lines = await self.render(status(200, capture_stalls=True))

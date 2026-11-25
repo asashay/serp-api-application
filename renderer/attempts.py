@@ -15,7 +15,9 @@ CHALLENGE = 429
 # The exit IP did not deliver Google's page within the per-attempt load limit.
 SLOW = 408
 RETRY = {CHALLENGE: "google challenge", SLOW: "slow exit IP"}
-MAX_ATTEMPTS = 3
+# Challenges usually come back within a few seconds, so several fresh IPs fit
+# in the deadline; RETRY_MIN_SECONDS stops attempts that could not finish.
+MAX_ATTEMPTS = 5
 LOG = logging.getLogger("renderer")
 
 

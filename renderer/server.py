@@ -158,9 +158,9 @@ class Renderer:
                 outcome = "off_site"
                 return web.Response(status=503)
             timings.note(google_status=response.status)
-            if (response.status in (403, 429) or urlsplit(page.url).path.startswith("/sorry/")
-                    or await page.locator(CHALLENGE_SELECTOR).count()):
+            if response.status in (403, 429) or await challenged(page):
                 outcome = "challenge"
+                timings.note(challenge_at="load")
                 return web.Response(status=CHALLENGE)
             if not response.ok:
                 outcome = "google_error"
@@ -188,6 +188,15 @@ class Renderer:
             timings.begin("links")
             if budget > 0:
                 timings.note(links_resolved=await resolve_goto_links(context, page, timeout=budget))
+            # Google's scripts can still swap in a challenge or redirect to
+            # /sorry/ while the page finishes loading. Check again, so it is
+            # retried here instead of reaching the parser.
+            timings.finish()
+            if await challenged(page):
+                outcome = "challenge"
+                timings.note(challenge_at="capture")
+                return web.Response(status=CHALLENGE)
+
             timings.begin("serialize")
             document = await page.evaluate(CAPTURE)
             html = document["html"].encode()
@@ -218,6 +227,14 @@ class Renderer:
                 self.closing = closing
             else:
                 await closing
+
+
+async def challenged(page):
+    """Whether the page is a challenge, by its /sorry/ address or a CAPTCHA.
+
+    Rails' parser checks the captured page with the same selector.
+    """
+    return urlsplit(page.url).path.startswith("/sorry/") or bool(await page.locator(CHALLENGE_SELECTOR).count())
 
 
 async def close_and_log(context, timings, number, outcome):
