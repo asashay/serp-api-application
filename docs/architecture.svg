@@ -61,7 +61,7 @@
 
   <!-- Container -->
   <rect x="548" y="80" width="412" height="372" class="group"/>
-  <text x="560" y="98" class="group-label">CLOUDFLARE CONTAINER · 1 GIB · KEPT WARM</text>
+  <text x="560" y="98" class="group-label">CLOUDFLARE CONTAINER · 2 VCPU · 8 GIB · KEPT WARM</text>
 
   <rect x="572" y="114" width="370" height="96" class="shadow"/>
   <rect x="568" y="110" width="370" height="96" class="box"/>
@@ -75,7 +75,7 @@
   <text x="584" y="270" class="name">Python renderer :3800</text>
   <text x="584" y="290" class="detail">warm Invisible Playwright Firefox, fresh context</text>
   <text x="584" y="308" class="detail">removes consent dialog · resolves /goto links</text>
-  <text x="584" y="326" class="detail">challenge → retry on a new exit IP (×3)</text>
+  <text x="584" y="326" class="detail">challenge → retry on a new exit IP (×5)</text>
 
   <rect x="572" y="374" width="370" height="62" class="shadow"/>
   <rect x="568" y="370" width="370" height="62" class="box"/>
