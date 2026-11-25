@@ -65,7 +65,7 @@
         </div>
       </section>
 
-      <section class="panel json-panel" aria-labelledby="heading-json">
+      <section class="panel json-panel" aria-labelledby="heading-json" data-playground-target="jsonPanel">
         <header class="panel-header">
           <span class="window-square" aria-hidden="true"></span>
           <h2 id="heading-json">API response</h2>
@@ -73,6 +73,17 @@
           <button class="text-button" type="button" data-action="playground#copyJson">Copy JSON</button>
         </header>
         <pre tabindex="0" aria-label="Search response JSON"><code data-playground-target="json"><%= JSON.pretty_generate(@sample) %></code></pre>
+        <div class="json-loading" role="status" aria-label="Waiting for the API response" data-playground-target="jsonLoading" hidden>
+          <%# A JSON outline whose rows light up in turn: indent, key width, value width (0 opens a nested object). %>
+          <div class="json-outline" aria-hidden="true">
+            <span class="json-brace">{</span>
+            <% [ [ 1, 5, 12 ], [ 1, 15, 0 ], [ 2, 4, 16 ], [ 2, 6, 7 ], [ 2, 9, 20 ], [ 1, 15, 0 ], [ 2, 6, 6 ], [ 2, 3, 13 ], [ 1, 15, 0 ], [ 2, 8, 1 ], [ 2, 5, 18 ], [ 2, 4, 22 ] ].each_with_index do |(indent, key, value), row| %>
+              <span class="json-row" style="--indent: <%= indent %>; --row: <%= row %>"><i style="width: <%= key %>ch"></i><% if value.positive? %><b style="width: <%= value %>ch"></b><% end %></span>
+            <% end %>
+            <span class="json-brace">}</span>
+          </div>
+          <p class="json-loading-title">Waiting for JSON<span class="json-cursor" aria-hidden="true"></span></p>
+        </div>
       </section>
     </div>
   </section>

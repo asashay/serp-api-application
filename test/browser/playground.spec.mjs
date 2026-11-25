@@ -62,6 +62,8 @@ test("shows the live response and keeps it when a new request fails", async ({ p
     await expect(page.getByRole("button", { name: "Searching…" })).toBeDisabled()
     await expect(page.getByRole("status", { name: "Rendering Google results" })).toBeVisible()
     await expect(page.locator("iframe.page-frame")).toBeHidden()
+    await expect(page.getByRole("status", { name: "Waiting for the API response" })).toBeVisible()
+    await expect(page.getByLabel("Search response JSON")).toBeHidden()
     if (requests === 1) {
       await route.fulfill({ status: 429, headers: { "Retry-After": "1" }, json: {} })
     } else if (requests === 2) {
@@ -85,6 +87,7 @@ test("shows the live response and keeps it when a new request fails", async ({ p
   await expect(page.getByLabel("Search response JSON")).toContainText("Live result")
   await expect(page.getByText("1 organic result · 881 ms")).toBeVisible()
   await expect(page.getByRole("status", { name: "Rendering Google results" })).toBeHidden()
+  await expect(page.getByRole("status", { name: "Waiting for the API response" })).toBeHidden()
   await expect(page.frameLocator("iframe.page-frame").getByRole("heading", { name: "Live page" })).toBeVisible()
   await expect(page.locator("iframe.page-frame")).toHaveCount(1)
   expect(await page.locator("iframe.page-frame").evaluate((frame) => frame === window.exampleFrame)).toBe(false)

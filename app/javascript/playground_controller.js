@@ -5,7 +5,7 @@ const tokenPattern = /"(?:\\.|[^"\\])*"(?=\s*:)|"(?:\\.|[^"\\])*"|\b(?:true|fals
 export default class extends Controller {
   static targets = [
     "query", "submit", "status", "comparison", "source", "summary", "json", "url", "open", "copyStatus",
-    "page", "pageEmpty", "location", "pagePanel", "pageLoading", "elapsed",
+    "page", "pageEmpty", "location", "pagePanel", "pageLoading", "elapsed", "jsonPanel", "jsonLoading",
   ]
 
   static values = { origin: String }
@@ -95,12 +95,15 @@ export default class extends Controller {
     ].filter(Boolean).join(" · ")
   }
 
-  // The results panel shows a loader with the elapsed time while a search runs;
-  // a failed search brings the previous page back.
+  // While a search runs, the results panel shows a loader with the elapsed
+  // time and the JSON panel one of its own; a failed search brings the
+  // previous page and JSON back.
   showLoading(loading) {
     clearInterval(this.elapsedTimer)
     this.pagePanelTarget.toggleAttribute("data-loading", loading)
     this.pageLoadingTarget.hidden = !loading
+    this.jsonPanelTarget.toggleAttribute("data-loading", loading)
+    this.jsonLoadingTarget.hidden = !loading
     if (!loading) return
 
     const startedAt = Date.now()

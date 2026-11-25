@@ -138,8 +138,23 @@ a { color: inherit; }
 .loading-meta { display: flex; gap: 14px; color: var(--muted); font-size: .64rem; }
 .loading-elapsed { color: var(--ink); font-variant-numeric: tabular-nums; }
 .page-panel[data-loading] .page-frame, .page-panel[data-loading] .page-empty { display: none; }
+
+/* The JSON panel's loader: an outline of the response whose rows light up in turn. */
+.json-loading { height: 560px; display: grid; grid-template-rows: 1fr auto; padding: 18px 20px; background: var(--code); color: #d5d9e3; font: .82rem/1.65 var(--mono); }
+.json-loading[hidden], .json-panel[data-loading] pre { display: none; }
+.json-outline { display: grid; align-content: start; }
+.json-brace { color: #8a8f99; }
+.json-row { display: flex; gap: 1ch; align-items: center; height: 1.65em; padding-left: calc(var(--indent) * 2ch); }
+.json-row i, .json-row b { height: .7em; opacity: .14; animation: json-row 2.4s steps(1, end) infinite; animation-delay: calc(var(--row) * .2s - 2.4s); }
+.json-row i { background: #9fbcff; }
+.json-row b { background: #cde6b4; }
+@keyframes json-row { 0% { opacity: .14; } 10% { opacity: 1; } 55% { opacity: .45; } 80% { opacity: .14; } }
+.json-loading-title { margin: 0; color: #8a8f99; font-size: .64rem; letter-spacing: .08em; text-transform: uppercase; }
+.json-cursor { display: inline-block; width: .6em; height: 1.1em; margin-left: .4em; vertical-align: -.2em; background: #9fbcff; animation: json-cursor 1s steps(1, end) infinite; }
+@keyframes json-cursor { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
-  .raster i, .loading-bar i { animation: none; opacity: .45; }
+  .raster i, .loading-bar i, .json-row i, .json-row b { animation: none; opacity: .45; }
+  .json-cursor { animation: none; }
   .primary, .secondary { transition: none; }
 }
 
@@ -165,7 +180,7 @@ a { color: inherit; }
   .comparison-panels { grid-template-columns: minmax(0, 1fr); }
   .json-panel { order: -1; }
   .page-frame, .page-empty, .page-loading { height: 480px; }
-  .json-panel pre { height: 420px; }
+  .json-panel pre, .json-loading { height: 420px; }
 }
 @media (max-width: 780px) {
   .shell { width: calc(100% - 40px); }
