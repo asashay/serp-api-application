@@ -42,7 +42,7 @@ curl -sS 'https://serp-api-demo.alexoliynyk.me/search.json?q=best+matcha+bar'
 
 - **Challenges and slow IPs.** CAPTCHAs, `/sorry/` pages, 403/429s and slow IPs are retried on a new IP, up to five times in 110 seconds. Otherwise the API returns a clear 502 or 504.
 - **Late challenges.** Google's scripts can swap in a challenge after the HTML loads, so the page is checked again just before capture.
-- **Opaque links.** Results link through `/goto` URLs; the renderer resolves each redirect in the page without navigating.
+- **Opaque links.** Google links results through `/goto` URLs. The renderer tries to resolve each redirect in the page without navigating, but Google usually withholds it, so most `link` values stay the `/goto` URL, which still works in a browser.
 - **Consent dialogs.** The cookie modal shown to European IPs is removed in the page, never answered.
 - **Location.** Each search sends both `uule` and a city-targeted exit IP. Only cities Google confirmed are offered.
 - **Untrusted HTML.** The preview has no scripts, links or embedded documents, a CSP for inline styles and `data:` images only, and a `sandbox=""` frame.
