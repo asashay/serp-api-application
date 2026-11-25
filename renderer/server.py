@@ -11,7 +11,7 @@ from aiohttp import web
 from invisible_playwright.async_api import InvisiblePlaywright
 from invisible_playwright._pw.async_api import Error, TimeoutError as BrowserTimeout
 
-from attempts import CHALLENGE, SLOW, render_deadline, with_fresh_ips
+from attempts import BROKEN, CHALLENGE, SLOW, render_deadline, with_fresh_ips
 from consent import remove_consent
 from links import resolve_goto_links
 from locations import targeting
@@ -25,8 +25,8 @@ LOG = logging.getLogger("renderer")
 
 
 # Production keeps the 110-second deadline: room for several fresh exit IPs,
-# and still under Cloudflare's 125-second proxy read timeout with Rails' 4 s
-# on top. A slow local run (for example Firefox under x86 emulation) can raise
+# and still under Cloudflare's 125-second proxy read timeout with the close
+# below and Rails' own 4 s on top (PageCapture::Renderer::READ_TIMEOUT). A slow local run (for example Firefox under x86 emulation) can raise
 # it with RENDER_TIMEOUT_SECONDS, and every step budget below grows with it.
 DEFAULT_DEADLINE = 110
 DEADLINE = render_deadline(os.environ.get("RENDER_TIMEOUT_SECONDS"))
@@ -111,18 +111,18 @@ class Renderer:
                         attempt, lambda: self.proxy.new_session(location), deadline, RETRY_MIN_SECONDS,
                     )
                     timings.finish()
-                    outcome = {200: "ok", CHALLENGE: "challenge", SLOW: "slow"}.get(
+                    outcome = {200: "ok", CHALLENGE: "challenge", SLOW: "slow", BROKEN: "browser_error"}.get(
                         response.status, f"status_{response.status}")
                     if response.status == SLOW:
                         response = web.Response(status=504)
+                    elif response.status == BROKEN:
+                        response = web.Response(status=503)
         except (BrowserTimeout, TimeoutError):
             outcome = "timeout"
             response = web.Response(status=504)
         except Error as error:
-            # Log only the browser's error code; messages can contain the URL.
-            code = re.search(r"\bNS_[A-Z_]+|\bnet::[A-Z_]+", str(error))
             outcome = "browser_error"
-            timings.note(error=code[0] if code else type(error).__name__)
+            timings.note(error=error_code(error))
             response = web.Response(status=503)
         finally:
             timings.note(attempts=attempts, located="yes" if location else "no")
@@ -230,6 +230,15 @@ class Renderer:
         except (BrowserTimeout, TimeoutError):
             outcome = "timeout"
             raise
+        except Error as error:
+            outcome = "browser_error"
+            timings.note(error=error_code(error))
+            # A proxy error, reset connection or interrupted navigation fails
+            # this exit IP only, so the next attempt gets a new one. Anything
+            # else would fail the same way again, so it is not retried.
+            if not network_error(error):
+                raise
+            return web.Response(status=BROKEN)
         finally:
             # Name the step an error or the deadline interrupted.
             if timings.step:
@@ -244,6 +253,25 @@ class Renderer:
                 self.closing = closing
             else:
                 await closing
+
+
+# Firefox and Chromium network error codes, such as NS_ERROR_NET_RESET.
+NETWORK_CODE = re.compile(r"\bNS_[A-Z_]+|\bnet::[A-Z_]+")
+
+
+def error_code(error):
+    """The browser's error code only; error messages can contain the URL."""
+    code = NETWORK_CODE.search(str(error))
+    return code[0] if code else type(error).__name__
+
+
+# Navigation that Google's redirects or scripts interrupt, worded by Playwright.
+INTERRUPTED = re.compile(r"execution context was destroyed|navigation|interrupted by another", re.IGNORECASE)
+
+
+def network_error(error):
+    """Whether a browser error came from the exit IP's network or navigation."""
+    return bool(NETWORK_CODE.search(str(error)) or INTERRUPTED.search(str(error)))
 
 
 def probe_fields(probe):

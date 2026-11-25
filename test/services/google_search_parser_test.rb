@@ -36,6 +36,25 @@ class GoogleSearchParserTest < Minitest::Test
     ], links
   end
 
+  def test_keeps_links_with_characters_uri_parse_rejects
+    html = <<~HTML
+      <div id="rso">
+        <div class="g"><a href="https://de.wikipedia.org/wiki/Kaffeemühle" data-goto="https://www.google.com/goto?url=CAESabc"><h3>Umlaut</h3></a></div>
+        <div class="g"><a href="https://example.com/a b|c{d}?q=x y"><h3>Spaces and pipes</h3></a></div>
+        <div class="g"><a href="https://example.com/%C3%A9t%C3%A9"><h3>Escaped</h3></a></div>
+        <div class="g"><a href="https://example.com/100%/a%zz#b#c"><h3>Stray percent and hash</h3></a></div>
+      </div>
+    HTML
+    results = @parser.call(html)
+    assert_equal [ 1, 2, 3, 4 ], results.map(&:position)
+    assert_equal [
+      [ "https://de.wikipedia.org/wiki/Kaffeem%C3%BChle", "https://www.google.com/goto?url=CAESabc" ],
+      [ "https://example.com/a%20b%7Cc%7Bd%7D?q=x%20y", nil ],
+      [ "https://example.com/%C3%A9t%C3%A9", nil ],
+      [ "https://example.com/100%25/a%25zz#b%23c", nil ]
+    ], results.map { |result| [ result.link, result.redirect_link ] }
+  end
+
   def test_extracts_result_details_and_omits_missing_ones
     html = <<~HTML
       <div id="rso">

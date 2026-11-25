@@ -1,4 +1,4 @@
-# A live search holds a thread for up to 114 s while it waits on the renderer,
+# A live search holds a thread for up to 118 s while it waits on the renderer,
 # and the gate admits one every 10-15 s, so about ten can be in flight. Enough threads keep the page, the saved
 # example and the health check answering while several searches are in flight;
 # waiting threads cost little memory.

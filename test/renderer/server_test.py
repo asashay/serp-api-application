@@ -143,6 +143,10 @@ def slow():
     raise server.BrowserTimeout("Timeout exceeded")
 
 
+def broken():
+    raise server.Error("NS_ERROR_NET_RESET while loading https://www.google.com/search?q=secret")
+
+
 def line(lines, prefix):
     """The one log line that starts with prefix; a successful attempt logs after the render."""
     [found] = [text for text in lines if text.startswith(prefix + " ")]
@@ -168,6 +172,38 @@ class RenderTest(unittest.IsolatedAsyncioTestCase):
                                    r"body_shown=block/visible/1 rso_h=812 text_chars=12b close_ms=\d+ total_ms=\d+$")
         self.assertRegex(line(lines, "render"), r"^render outcome=ok queue_ms=\d+ attempts_ms=\d+ attempts=1 located=no "
                                     r"total_ms=\d+$")
+
+    async def test_retries_a_browser_error_on_a_new_ip(self):
+        response, lines = await self.render(broken, status(200))
+
+        self.assertEqual(response.status, 200)
+        self.assertRegex(line(lines, "attempt 1"), r"^attempt 1 outcome=browser_error .*error=NS_ERROR_NET_RESET ")
+        self.assertIn(" stopped_in=load ", line(lines, "attempt 1"))
+        self.assertNotIn("secret", "\n".join(lines))
+        self.assertRegex(line(lines, "render"), r"^render outcome=ok .*attempts=2 ")
+
+    async def test_reports_unavailable_when_every_attempt_has_a_browser_error(self):
+        response, lines = await self.render(*[broken] * 5)
+
+        self.assertEqual(response.status, 503)
+        self.assertRegex(line(lines, "render"), r"^render outcome=browser_error .*attempts=5 ")
+
+    async def test_does_not_retry_a_browser_error_another_ip_would_repeat(self):
+        def script_bug():
+            raise server.Error("TypeError: document.body is null")
+
+        response, lines = await self.render(script_bug, status(200))
+
+        self.assertEqual(response.status, 503)
+        self.assertRegex(line(lines, "render"), r"^render outcome=browser_error .*attempts=1 ")
+
+    async def test_retries_a_navigation_google_interrupted(self):
+        def interrupted():
+            raise server.Error("Execution context was destroyed, most likely because of a navigation")
+
+        response, _lines = await self.render(interrupted, status(200))
+
+        self.assertEqual(response.status, 200)
 
     async def test_logs_a_challenge_and_the_retry(self):
         response, lines = await self.render(status(429), status(200))

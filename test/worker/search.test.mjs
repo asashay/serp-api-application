@@ -35,7 +35,7 @@ test("rejects an unknown location before reserving and forwards a known one", as
   const url = (location) => `/search.json?${new URLSearchParams({ q: "matcha", location })}`
   const send = sender({
     SEARCH_GATE: { getByName: () => ({ reserve: () => { reservations++; return { retryAfter: 0, nextSearchAt: Date.now() } } }) },
-    RAILS: { getByName: () => ({ async fetch(request) {
+    RAILS: { getByName: () => ({ ready() {}, async fetch(request) {
       bodies.push(await request.json())
       return Response.json({ organic_results: [] }, { headers: { "X-Search-Response": "1" } })
     } }) },
@@ -96,7 +96,7 @@ test("validates before reserving and shares one slot between public and playgrou
       assert.equal(name, "global")
       return { reserve() { reservations++; return reserveSearchSlot(data, Date.now()) } }
     } },
-    RAILS: { getByName: () => ({ async fetch(request) {
+    RAILS: { getByName: () => ({ ready() {}, async fetch(request) {
       captures++
       assert.equal(new URL(request.url).pathname, "/internal/capture")
       const payload = await request.json()
@@ -127,11 +127,30 @@ test("validates before reserving and shares one slot between public and playgrou
   assert.equal(captures, 1)
 })
 
+test("waits for a cold container before the capture and counts the wait", async () => {
+  const steps = []
+  const send = sender({
+    SEARCH_GATE: { getByName: () => ({ reserve: () => ({ retryAfter: 0, nextSearchAt: Date.now() }) }) },
+    RAILS: { getByName: () => ({
+      async ready() { steps.push("ready"); await new Promise((resolve) => setTimeout(resolve, 30)) },
+      async fetch(request) {
+        steps.push(["capture", (await request.json()).elapsed_ms])
+        return Response.json({ organic_results: [] }, { headers: { "X-Search-Response": "1" } })
+      },
+    }) },
+  })
+
+  assert.equal((await send("/search.json?q=rails")).status, 200)
+  assert.equal(steps[0], "ready")
+  assert.equal(steps[1][0], "capture")
+  assert.ok(steps[1][1] >= 25, `elapsed_ms ${steps[1][1]}`)
+})
+
 test("asks Rails for a page preview only for the playground", async () => {
   const previews = []
   const send = sender({
     SEARCH_GATE: { getByName: () => ({ reserve: () => ({ retryAfter: 0, nextSearchAt: Date.now() }) }) },
-    RAILS: { getByName: () => ({ async fetch(request) {
+    RAILS: { getByName: () => ({ ready() {}, async fetch(request) {
       previews.push((await request.json()).preview)
       return Response.json({ organic_results: [] }, { headers: { "X-Search-Response": "1" } })
     } }) },
@@ -145,7 +164,7 @@ test("asks Rails for a page preview only for the playground", async () => {
 test("preserves typed capture errors and normalizes framework errors", async () => {
   const send = (response) => sender({
     SEARCH_GATE: { getByName: () => ({ reserve: () => ({ retryAfter: 0, nextSearchAt: Date.now() + 10_000 }) }) },
-    RAILS: { getByName: () => ({ fetch: () => response }) },
+    RAILS: { getByName: () => ({ ready() {}, fetch: () => response }) },
   })("/search.json?q=missing")
 
   const challenge = await send(Response.json({ error: { code: "upstream_challenge" } }, {
@@ -169,7 +188,7 @@ test("logs the renderer's timing summary without forwarding it", async () => {
   try {
     const response = await sender({
       SEARCH_GATE: { getByName: () => ({ reserve: () => ({ retryAfter: 0, nextSearchAt: Date.now() }) }) },
-      RAILS: { getByName: () => ({ fetch: () => Response.json({ error: { code: "upstream_challenge" } }, {
+      RAILS: { getByName: () => ({ ready() {}, fetch: () => Response.json({ error: { code: "upstream_challenge" } }, {
         status: 502, headers: { "X-Search-Response": "1", "X-Render-Log": summary },
       }) }) },
     })("/search.json?q=rails")
@@ -192,7 +211,7 @@ test("logs an admitted search even when Rails sent no renderer summary", async (
   try {
     await sender({
       SEARCH_GATE: { getByName: () => ({ reserve: () => ({ retryAfter: 0, nextSearchAt: Date.now() }) }) },
-      RAILS: { getByName: () => ({ fetch: () => Response.json({ error: { code: "upstream_unavailable" } }, {
+      RAILS: { getByName: () => ({ ready() {}, fetch: () => Response.json({ error: { code: "upstream_unavailable" } }, {
         status: 503, headers: { "X-Search-Response": "1" },
       }) }) },
     })("/search.json?q=rails")

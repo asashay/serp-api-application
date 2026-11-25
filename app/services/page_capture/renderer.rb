@@ -4,8 +4,8 @@ module PageCapture
   class Renderer
     LIMIT = 5 * 1024 * 1024
     ENDPOINT = URI("http://127.0.0.1:3800")
-    # The renderer's deadline plus headroom. renderer/server.py reads
-    # RENDER_TIMEOUT_SECONDS with the same rules: finite and above 110, else 110.
+    # renderer/server.py reads RENDER_TIMEOUT_SECONDS with the same rules:
+    # finite and above 110, else 110.
     def self.deadline(value)
       seconds = Float(value.presence || 110)
       seconds.finite? && seconds > 110 ? seconds : 110.0
@@ -13,7 +13,11 @@ module PageCapture
       110.0
     end
 
-    READ_TIMEOUT = deadline(ENV["RENDER_TIMEOUT_SECONDS"]) + 4
+    # The renderer answers within its deadline plus up to 4 s (scaled with it)
+    # to close a failed attempt's browser context. Rails waits 4 s beyond that,
+    # so the renderer's answer and timing log arrive before Rails gives up:
+    # 118 s by default, under Cloudflare's 125-second proxy read timeout.
+    READ_TIMEOUT = deadline(ENV["RENDER_TIMEOUT_SECONDS"]).then { |seconds| seconds + (4 * seconds / 110) + 4 }
     Error = Class.new(StandardError) do
       attr_reader :code, :status
 
@@ -31,12 +35,17 @@ module PageCapture
     LOG_LIMIT = 2000
     attr_reader :log
 
+    def initialize(endpoint: ENDPOINT, read_timeout: READ_TIMEOUT)
+      @endpoint = endpoint
+      @read_timeout = read_timeout
+    end
+
     # location: a name from config/locations.json; the renderer picks an exit
     # IP there. nil uses any exit IP.
     def call(url, location: nil)
       request = Net::HTTP::Post.new("/render", "Content-Type" => "application/json")
       request.body = JSON.generate({ url: url, location: location }.compact)
-      http(read_timeout: READ_TIMEOUT).request(request) do |response|
+      http(read_timeout: @read_timeout).request(request) do |response|
         @log = response[LOG_HEADER]&.gsub(/[^ -~]/, "")&.slice(0, LOG_LIMIT)
         case response.code.to_i
         when 200
@@ -73,7 +82,7 @@ module PageCapture
     private
 
     def http(read_timeout:)
-      Net::HTTP.new(ENDPOINT.host, ENDPOINT.port, nil).tap do |connection|
+      Net::HTTP.new(@endpoint.host, @endpoint.port, nil).tap do |connection|
         connection.open_timeout = 2
         connection.read_timeout = read_timeout
       end

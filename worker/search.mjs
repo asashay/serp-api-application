@@ -95,7 +95,12 @@ export async function handleSearch(request, url, env) {
       return fail("rate_limited", "The demo allows one live search about every 10 seconds.", 429)
     }
 
-    const upstream = await env.RAILS.getByName("rails").fetch(new Request("http://rails.internal/internal/capture", {
+    // A cold container can take minutes to start. Wait for it first, so the
+    // capture request, and Rails' own deadline, start on a warm container and
+    // elapsed_ms counts the wait.
+    const rails = env.RAILS.getByName("rails")
+    await rails.ready()
+    const upstream = await rails.fetch(new Request("http://rails.internal/internal/capture", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
       // Only the playground shows the captured page next to the JSON.

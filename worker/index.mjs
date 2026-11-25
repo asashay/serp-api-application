@@ -20,9 +20,14 @@ export class RailsContainer extends DurableObject {
     }
   }
 
-  async fetch(request) {
+  // Resolves once Rails, and after a fresh start Firefox, answer.
+  async ready() {
     this.starting ??= this.waitForRails().finally(() => { this.starting = undefined })
     await this.starting
+  }
+
+  async fetch(request) {
+    await this.ready()
 
     const url = new URL(request.url)
     url.protocol = "http:"

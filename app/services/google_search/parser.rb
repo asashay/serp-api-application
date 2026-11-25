@@ -110,18 +110,18 @@ module GoogleSearch
       href = anchor["href"]
       return if href.nil?
 
-      url = URI.parse(href)
+      url = parse_url(href)
       if google_path?(url, "/goto")
         goto = absolute_google_url(href)
         return [ goto, goto ]
       end
 
       redirect = absolute_google_url(anchor["data-goto"]) if anchor["data-goto"]
-      redirect = nil unless redirect && google_path?(URI.parse(redirect), "/goto")
+      redirect = nil unless redirect && google_path?(parse_url(redirect), "/goto")
       if google_path?(url, "/url")
         redirect = absolute_google_url(href)
         target = URI.decode_www_form(url.query.to_s).to_h.values_at("q", "url").compact.first
-        url = URI.parse(target.to_s)
+        url = parse_url(target)
       end
       return unless web_url?(url)
 
@@ -130,9 +130,21 @@ module GoogleSearch
       nil
     end
 
+    # Browsers accept links with raw spaces, non-ASCII or characters such as
+    # "|" and "{}", and resolved /goto destinations arrive that way. URI.parse
+    # does not, so those bytes are percent-encoded first instead of the result
+    # being dropped. Existing escapes are kept; a "%" that starts none and
+    # every "#" after the first are encoded too.
+    URL_UNSAFE = %r{%(?![0-9A-Fa-f]{2})|[^A-Za-z0-9\-._~:/?#@!$&'()*+,;=%]}
+    def parse_url(value)
+      url, hash, fragment = value.to_s.strip.partition("#")
+      url = "#{url}#{hash}#{fragment.gsub('#', '%23')}"
+      URI.parse(url.gsub(URL_UNSAFE) { |char| char.bytes.map { |byte| format("%%%02X", byte) }.join })
+    end
+
     def favicon(card)
       src = card.at_css("img.XNo5Ab")&.[]("src").to_s
-      src if src.start_with?("data:image/") || web_url?(URI.parse(src))
+      src if src.start_with?("data:image/") || web_url?(parse_url(src))
     rescue URI::InvalidURIError
       nil
     end
@@ -182,7 +194,7 @@ module GoogleSearch
     end
 
     def absolute_google_url(href)
-      URI.join(GOOGLE_ORIGIN, href).to_s
+      URI.join(GOOGLE_ORIGIN, parse_url(href).to_s).to_s
     rescue ArgumentError, URI::InvalidURIError
       nil
     end
