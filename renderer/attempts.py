@@ -24,16 +24,16 @@ LOG = logging.getLogger("renderer")
 def render_deadline(value):
     """Seconds allowed per capture from RENDER_TIMEOUT_SECONDS.
 
-    Finite values above 30 raise the deadline; anything else keeps 30, so a
+    Finite values above 60 raise the deadline; anything else keeps 60, so a
     typo never stops the renderer. Rails applies the same rules
     (PageCapture::Renderer.deadline) to its read timeout.
     """
     try:
-        seconds = float(value or 30)
+        seconds = float(value or 60)
     except (TypeError, ValueError):
         LOG.warning("ignoring invalid RENDER_TIMEOUT_SECONDS")
-        return 30.0
-    return seconds if math.isfinite(seconds) and seconds > 30 else 30.0
+        return 60.0
+    return seconds if math.isfinite(seconds) and seconds > 60 else 60.0
 
 
 async def with_fresh_ips(attempt, new_session, deadline, min_seconds, max_attempts=MAX_ATTEMPTS):

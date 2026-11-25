@@ -24,22 +24,24 @@ MAX_BYTES = 5 * 1024 * 1024
 LOG = logging.getLogger("renderer")
 
 
-# Production keeps the 30-second deadline. A slow local run (for example
-# Firefox under x86 emulation) can raise it with RENDER_TIMEOUT_SECONDS.
+# Production keeps the 60-second deadline, which leaves room for several
+# fresh exit IPs. A slow local run (for example Firefox under x86 emulation)
+# can raise it with RENDER_TIMEOUT_SECONDS; every step budget below scales with
+# it, so at the default they are the seconds written in each fraction.
 DEADLINE = render_deadline(os.environ.get("RENDER_TIMEOUT_SECONDS"))
 # Time /goto link resolution may take; it never eats into the capture margin.
-RESOLVE_SECONDS = 5 * DEADLINE / 30
+RESOLVE_SECONDS = 5 * DEADLINE / 60
 # Left after resolving for the DOM capture and the response.
 CAPTURE_MARGIN_SECONDS = 3
-CLOSE_TIMEOUT = 2 * DEADLINE / 30
+CLOSE_TIMEOUT = 2 * DEADLINE / 60
 # An exit IP gets this long to deliver Google's HTML; a slower one is replaced
 # by a new IP while there is still time for another attempt.
-LOAD_SECONDS = 12 * DEADLINE / 30
+LOAD_SECONDS = 12 * DEADLINE / 60
 # After the HTML, how long to wait for the full load, which fills in the
 # result images. A slow subresource then costs at most this, not the deadline.
-IMAGES_SECONDS = 4 * DEADLINE / 30
+IMAGES_SECONDS = 4 * DEADLINE / 60
 # Start another attempt after a challenge or slow IP only if a page load still fits.
-RETRY_MIN_SECONDS = 10 * DEADLINE / 30
+RETRY_MIN_SECONDS = 10 * DEADLINE / 60
 CHALLENGE_SELECTOR = 'form#captcha-form, form[action*="/sorry/"], iframe[src*="/recaptcha/"]'
 
 

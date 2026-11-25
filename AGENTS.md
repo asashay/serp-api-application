@@ -57,8 +57,8 @@ Cloudflare Container, 1 GiB, linux/amd64    one instance, kept warm
 - **Destinations are checked in depth.** Rails builds a fixed Google search URL. The Playwright route filter, the CONNECT guard and the final-URL check restrict traffic to the authorized Google origins.
 - **Quota is spent only on admitted attempts.** Invalid queries, unknown locations and rate-limited requests consume nothing. An admitted capture counts even if it fails. A capture that arrives while another is running waits within its own deadline.
 - **The page is ready when its HTML is parsed.** Google sends the results in the HTML, so an attempt waits for `domcontentloaded`, capped at 12 seconds. It then waits up to 4 more seconds for the full load, because Google's scripts fill in most result images (inline `data:` URIs) while the page loads. A slow subresource costs at most those 4 seconds (logged as `loaded=no`) instead of the whole deadline.
-- **Challenges and slow IPs retry on a new IP.** A capture that meets a challenge (HTTP 403/429, a `/sorry/` URL or a captcha), or whose exit IP doesn't deliver the HTML within 12 seconds, retries from a new DataImpulse session. It makes up to five attempts, while at least a third of the deadline remains. The renderer checks for a challenge twice: when the HTML is parsed, and again just before capturing, because Google's scripts can swap in a CAPTCHA or redirect to `/sorry/` while the page loads. Rails' parser uses the same selector, so a challenge reaches the API only when every attempt met one. When every attempt was slow, the API returns 504 `upstream_timeout`. (The 12- and 4-second waits scale with `RENDER_TIMEOUT_SECONDS`.)
-- **`/goto` links are resolved in the page.** The renderer fetches each `/goto` URL with `redirect: "manual"`, one at a time with a short gap, and reads the `Location` header from the response event. It rewrites the link and keeps the original in `data-goto`. It stops when the time budget (a sixth of the deadline) runs out.
+- **Challenges and slow IPs retry on a new IP.** A capture that meets a challenge (HTTP 403/429, a `/sorry/` URL or a captcha), or whose exit IP doesn't deliver the HTML within 12 seconds, retries from a new DataImpulse session. It makes up to five attempts, while at least 10 seconds of the deadline remain. The renderer checks for a challenge twice: when the HTML is parsed, and again just before capturing, because Google's scripts can swap in a CAPTCHA or redirect to `/sorry/` while the page loads. Rails' parser uses the same selector, so a challenge reaches the API only when every attempt met one. When every attempt was slow, the API returns 504 `upstream_timeout`. The 60-second deadline exists so several fresh IPs fit, not so one slow IP can take longer. (These step limits are for the 60-second default and scale with `RENDER_TIMEOUT_SECONDS`.)
+- **`/goto` links are resolved in the page.** The renderer fetches each `/goto` URL with `redirect: "manual"`, one at a time with a short gap, and reads the `Location` header from the response event. It rewrites the link and keeps the original in `data-goto`. It stops when its 5-second budget runs out.
 - **The consent dialog is removed, not answered.** `consent.js` removes the dialog, its full-screen backdrop and `aria-hidden`/`inert`, and unlocks scrolling. Nothing is posted to `consent.google.com`.
 - **Logs carry no content.** Rails tags its log lines with the request ID and filters `q`, `query` and `html`. The renderer logs only browser error codes, proxy status codes and step timings.
 - **Every render logs its timings.** Each attempt logs one line, `attempt N outcome=… context_ms load_ms google_status loaded images_ms consent_ms links_resolved links_ms serialize_ms kib close_ms total_ms`, with `challenge_at=load|capture` when Google challenged the attempt, and the request ends with `render outcome=… queue_ms attempts_ms attempts located total_ms`. When a timeout or error interrupts an attempt or the render, `stopped_in` names the step. A successful attempt closes its browser context after answering, so the close never turns a captured page into a timeout; the next capture waits for it. To see where a slow search spent its time, search the container logs for `render outcome=timeout`. `renderer/timings.py` builds these lines.
@@ -94,9 +94,9 @@ Errors have `error.code`, `error.message` and `request_id`:
 | 502 | `upstream_challenge` | Every attempt met a challenge |
 | 502 | `unknown_layout` | The parser recognized no results |
 | 503 | `upstream_unavailable`, `search_unavailable` | The renderer or container is not ready |
-| 504 | `upstream_timeout` | The 30-second deadline passed, or every exit IP was too slow |
+| 504 | `upstream_timeout` | The 60-second deadline passed, or every exit IP was too slow |
 
-The public API and playground share a 10–15 second cooldown and 400 admitted captures per UTC calendar month. The renderer has a 30-second deadline and a 5 MiB output limit; the preview is capped at 2 MiB.
+The public API and playground share a 10–15 second cooldown and 400 admitted captures per UTC calendar month. The renderer has a 60-second deadline (Rails waits 4 seconds longer) and a 5 MiB output limit; the preview is capped at 2 MiB.
 
 ## Run locally
 
@@ -133,7 +133,7 @@ docker run --rm --platform linux/amd64 -p 3000:3000 --env-file .env.renderer \
 ```
 
 - `LOCAL_LIVE_SEARCH=1` sends `/search.json` and `/playground/search` through the renderer for any query. There is no cooldown or monthly cap, so every search uses proxy traffic.
-- `RENDER_TIMEOUT_SECONDS` raises the 30-second render deadline, for example under emulation. Rails and the renderer read it the same way: values that are not a finite number above 30 keep 30.
+- `RENDER_TIMEOUT_SECONDS` raises the 60-second render deadline, for example under emulation; every step limit scales with it. Rails and the renderer read it the same way: values that are not a finite number above 60 keep 60.
 
 ## Tests
 

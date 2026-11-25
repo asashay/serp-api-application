@@ -5,12 +5,12 @@ module PageCapture
     LIMIT = 5 * 1024 * 1024
     ENDPOINT = URI("http://127.0.0.1:3800")
     # The renderer's deadline plus headroom. renderer/server.py reads
-    # RENDER_TIMEOUT_SECONDS with the same rules: finite and above 30, else 30.
+    # RENDER_TIMEOUT_SECONDS with the same rules: finite and above 60, else 60.
     def self.deadline(value)
-      seconds = Float(value.presence || 30)
-      seconds.finite? && seconds > 30 ? seconds : 30.0
+      seconds = Float(value.presence || 60)
+      seconds.finite? && seconds > 60 ? seconds : 60.0
     rescue ArgumentError, TypeError
-      30.0
+      60.0
     end
 
     READ_TIMEOUT = deadline(ENV["RENDER_TIMEOUT_SECONDS"]) + 4
