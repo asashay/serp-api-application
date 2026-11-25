@@ -72,7 +72,10 @@ class CaptureController < ActionController::API
       elapsed_ms: elapsed_ms)
       .call(html, source: source)
     Rails.logger.info { "search outcome=ok source=#{source} elapsed_ms=#{payload.fetch(:elapsed_ms)}" }
-    payload[:preview_html] = GoogleSearch::Preview.new(html).call if preview?
+    if preview?
+      payload[:preview_html] = GoogleSearch::Preview.new(html).call
+      log_preview(payload[:preview_html])
+    end
     response.set_header("X-Search-Response", "1") if action_name == "capture"
     render json: payload
   end
@@ -111,6 +114,17 @@ class CaptureController < ActionController::API
 
     Rails.logger.info { log }
     response.set_header(PageCapture::Renderer::LOG_HEADER, log) if action_name == "capture"
+  end
+
+  # Adds the sanitized preview's size to the render log, or "none" when it could
+  # not be built, so a blank preview can be told apart.
+  def log_preview(preview_html)
+    summary = preview_html ? "preview kib=#{preview_html.bytesize / 1024}" : "preview none"
+    Rails.logger.info { summary }
+    return unless action_name == "capture"
+
+    log = [ response.get_header(PageCapture::Renderer::LOG_HEADER), summary ].compact.join(" | ")
+    response.set_header(PageCapture::Renderer::LOG_HEADER, log)
   end
 
   def render_search_error(error)

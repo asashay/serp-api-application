@@ -23,7 +23,7 @@ Browser or API client
 Cloudflare Worker (worker/)                 validates q and location, reserves an attempt
   │  SearchGate Durable Object              10–15 s cooldown + 400 captures per UTC month
   ▼
-Cloudflare Container, 1 GiB, linux/amd64    one instance, kept warm
+Cloudflare Container, 2 vCPU, 8 GiB, amd64  one instance, kept warm
   ├─ Rails / Puma :3000 (app/)              builds the Google URL, parses results, returns JSON
   │     │  POST http://127.0.0.1:3800/render  {url, location}
   │     ▼
@@ -61,7 +61,7 @@ Cloudflare Container, 1 GiB, linux/amd64    one instance, kept warm
 - **`/goto` links are resolved in the page.** The renderer fetches each `/goto` URL with `redirect: "manual"`, one at a time with a short gap, and reads the `Location` header from the response event. It rewrites the link and keeps the original in `data-goto`. It stops when its 10-second budget runs out.
 - **The consent dialog is removed, not answered.** `consent.js` removes the dialog, its full-screen backdrop and `aria-hidden`/`inert`, and unlocks scrolling. Nothing is posted to `consent.google.com`.
 - **Logs carry no content.** Rails tags its log lines with the request ID and filters `q`, `query` and `html`. The renderer logs only browser error codes, proxy status codes and step timings.
-- **Every search's timings reach the Worker log.** Cloudflare doesn't keep the container's output, so the renderer returns its summary in an `X-Render-Log` response header. Rails passes it on (internal capture route only) and the Worker logs every admitted search as `{request_id, status, elapsed_ms, render}` (`render` is null when Rails got no summary, for example when the renderer was unreachable), without forwarding the summary to the client. The summary is `render outcome=… queue_ms attempts_ms attempts located total_ms`, then one `attempt N outcome=… context_ms load_ms google_status loaded images_ms consent_ms links_resolved links_ms serialize_ms kib total_ms` entry per attempt, separated by ` | `. An attempt Google challenged adds `challenge_at=load|capture`. When a timeout or error interrupts an attempt or the render, `stopped_in` names the step. A successful attempt closes its browser context after answering, so the close never turns a captured page into a timeout; the next capture waits for it. To read them, query Workers Observability for service `serp-api-demo` (for example with a token that has Workers Observability Read). The renderer also prints the same lines, with `close_ms`, to the container's stdout. `renderer/timings.py` builds them.
+- **Every search's timings reach the Worker log.** Cloudflare doesn't keep the container's output, so the renderer returns its summary in an `X-Render-Log` response header. Rails passes it on (internal capture route only) and the Worker logs every admitted search as `{request_id, status, elapsed_ms, render}` (`render` is null when Rails got no summary, for example when the renderer was unreachable), without forwarding the summary to the client. The summary is `render outcome=… queue_ms attempts_ms attempts located total_ms`, then one `attempt N outcome=… context_ms load_ms google_status loaded images_ms consent_ms links_resolved links_ms serialize_ms kib total_ms` entry per attempt, separated by ` | `. A successful attempt adds what `capture.js` saw on the live page, structure only: `html_shown` and `body_shown` (computed `display/visibility/opacity`), `search_h` and `rso_h` (rendered heights, -1 when missing), `text_chars`, `styles`, `stylesheets`, `cssom_rules` (rules in empty `<style>` elements, which the HTML loses) and `adopted_sheets`. When the playground asked for a preview, Rails appends `preview kib=N`, or `preview none` when it could not be built. An attempt Google challenged adds `challenge_at=load|capture`. When a timeout or error interrupts an attempt or the render, `stopped_in` names the step. A successful attempt closes its browser context after answering, so the close never turns a captured page into a timeout; the next capture waits for it. To read them, query Workers Observability for service `serp-api-demo` (for example with a token that has Workers Observability Read). The renderer also prints the same lines, with `close_ms`, to the container's stdout. `renderer/timings.py` builds them.
 - **Parsing is independent.** `GoogleSearch::Parser` reads saved HTML without network or browser dependencies, recognizes challenge and zero-result pages, unwraps Google redirect links, and caps output at ten organic results. Its tests use real captured pages.
 
 ## API contract
@@ -96,7 +96,7 @@ Errors have `error.code`, `error.message` and `request_id`:
 | 503 | `upstream_unavailable`, `search_unavailable` | The renderer or container is not ready |
 | 504 | `upstream_timeout` | The 110-second deadline passed, or every exit IP was too slow |
 
-The public API and playground share a 10–15 second cooldown and 400 admitted captures per UTC calendar month. The renderer has a 110-second deadline (Rails waits 4 seconds longer) and a 5 MiB output limit; the preview is capped at 2 MiB.
+The public API and playground share a 10–15 second cooldown and 400 admitted captures per UTC calendar month. The renderer has a 110-second deadline (Rails waits 4 seconds longer) and a 5 MiB output limit, which also bounds the preview.
 
 ## Run locally
 
@@ -166,6 +166,6 @@ Run `bin/ci`, then publish the container image and Worker with `npm run deploy`.
 
 To check a deploy without spending proxy traffic, use `/`, `/example.json` and a request with an unknown `location`, which returns 400 before quota.
 
-Puma and Firefox share one 1 GiB Cloudflare Container. A five-minute scheduled check keeps the container active against its 15-minute idle timeout and checks the local Firefox connection. The Worker replaces the running container when the image changes. After rotating proxy secrets, increment `RENDERER_CONFIG_VERSION` and deploy the Worker to restart the container with the new credentials. Correlate requests by `X-Request-Id`, and check combined memory in Cloudflare container metrics after a live capture.
+Puma and Firefox share one Cloudflare Container (2 vCPU, 8 GiB, set in `container.start` in `worker/index.mjs`; a smaller instance starved Firefox and drew more challenges). A five-minute scheduled check keeps the container active against its 15-minute idle timeout and checks the local Firefox connection. The Worker replaces the running container when the image changes. After rotating proxy secrets, increment `RENDERER_CONFIG_VERSION` and deploy the Worker to restart the container with the new credentials. Correlate requests by `X-Request-Id`, and check combined memory in Cloudflare container metrics after a live capture.
 
 Font licenses for [Inter](vendor/licenses/inter.txt) and [IBM Plex Mono](vendor/licenses/ibm-plex-mono.txt) are included.

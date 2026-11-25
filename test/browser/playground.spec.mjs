@@ -52,6 +52,9 @@ test("shows the live response and keeps it when a new request fails", async ({ p
   await query.fill("coffee & tea")
   await expect(page.getByRole("link", { name: "Open JSON" })).toHaveAttribute("href", /\?q=coffee\+%26\+tea&location=Austin%2C\+Texas%2C\+United\+States$/)
 
+  // The live page goes into a new frame, not the one that showed the example.
+  await page.locator("iframe.page-frame").evaluate((frame) => { window.exampleFrame = frame })
+
   let requests = 0
   await page.route("**/playground/search?*", async (route) => {
     expect(new URL(route.request().url()).searchParams.get("q")).toBe("coffee & tea")
@@ -83,6 +86,8 @@ test("shows the live response and keeps it when a new request fails", async ({ p
   await expect(page.getByText("1 organic result · 881 ms")).toBeVisible()
   await expect(page.getByRole("status", { name: "Rendering Google results" })).toBeHidden()
   await expect(page.frameLocator("iframe.page-frame").getByRole("heading", { name: "Live page" })).toBeVisible()
+  await expect(page.locator("iframe.page-frame")).toHaveCount(1)
+  expect(await page.locator("iframe.page-frame").evaluate((frame) => frame === window.exampleFrame)).toBe(false)
   await expect(page.getByLabel("Search response JSON")).not.toContainText("preview_html")
   await expect(page.getByText("Next search in 2s.", { exact: true })).toBeVisible()
 
@@ -173,4 +178,8 @@ test("the renderer serializes JavaScript-created content and inline styles witho
   expect(document.html).not.toMatch(/<script|<link/)
   expect(document.html).toContain("<style>h2 { letter-spacing: 1px }</style>")
   expect(document.url).toBe(page.url())
+  expect(document.probe).toMatchObject({
+    body_shown: "block/visible/1", search_h: -1, rso_h: -1, styles: 1, stylesheets: 1, adopted_sheets: 0,
+  })
+  expect(document.probe.text_chars).toBe("Rendered heading".length)
 })

@@ -87,7 +87,9 @@ class Page:
         if script == server.CAPTURE:
             if getattr(self.load, "capture_stalls", False):
                 raise server.BrowserTimeout("Timeout exceeded")
-            return {"html": "<html><div id=rso></div></html>", "url": self.url}
+            # The probe's values are cleaned before they reach the log line.
+            probe = {"body_shown": "block/visible/1", "rso_h": 812, "text_chars": "12 <b>", "Bad key": "x"}
+            return {"html": "<html><div id=rso></div></html>", "url": self.url, "probe": probe}
         return [] if script == links.COLLECT else False
 
 
@@ -163,7 +165,7 @@ class RenderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertRegex(line(lines, "attempt 1"), r"^attempt 1 outcome=ok context_ms=\d+ load_ms=\d+ google_status=200 "
                                    r"loaded=yes images_ms=\d+ consent_ms=\d+ links_resolved=0 links_ms=\d+ serialize_ms=\d+ kib=0 "
-                                   r"close_ms=\d+ total_ms=\d+$")
+                                   r"body_shown=block/visible/1 rso_h=812 text_chars=12b close_ms=\d+ total_ms=\d+$")
         self.assertRegex(line(lines, "render"), r"^render outcome=ok queue_ms=\d+ attempts_ms=\d+ attempts=1 located=no "
                                     r"total_ms=\d+$")
 
@@ -173,7 +175,7 @@ class RenderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertRegex(response.headers[server.RENDER_LOG],
                          r"^render outcome=ok .*attempts=2 .* \| attempt 1 outcome=challenge .*challenge_at=load"
-                         r".* \| attempt 2 outcome=ok .*kib=0 total_ms=\d+$")
+                         r".* \| attempt 2 outcome=ok .*kib=0 body_shown=.* total_ms=\d+$")
         self.assertRegex(line(lines, "attempt 1"), r"^attempt 1 outcome=challenge .*google_status=429")
         self.assertTrue(any(line.startswith("attempt 2 outcome=ok ") for line in lines))
         self.assertRegex(line(lines, "render"), r"^render outcome=ok .* attempts=2 ")

@@ -7,7 +7,6 @@ module GoogleSearch
   # shows it in a sandboxed iframe (no scripts, forms, popups or navigation), and
   # the CSP below stops it from loading anything at all.
   class Preview
-    LIMIT = 2 * 1024 * 1024
     POLICY = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; " \
       "form-action 'none'; base-uri 'none'".freeze
     REMOVED = %w[
@@ -30,7 +29,8 @@ module GoogleSearch
       @html = html
     end
 
-    # The sanitized document, or nil when it cannot be built within the limit.
+    # The sanitized document, or nil when Nokogiri cannot parse the page. Its size
+    # follows the captured page, which the renderer already caps at 5 MiB.
     def call
       document = Nokogiri::HTML5(@html)
       document.xpath("//comment()").each(&:remove)
@@ -43,8 +43,7 @@ module GoogleSearch
       head.prepend_child(document.create_element("meta", "http-equiv" => "Content-Security-Policy", "content" => POLICY))
       head.prepend_child(document.create_element("meta", "charset" => "utf-8"))
 
-      html = "<!doctype html>#{document.root.to_html}"
-      html if html.bytesize <= LIMIT
+      "<!doctype html>#{document.root.to_html}"
     rescue ArgumentError
       nil
     end

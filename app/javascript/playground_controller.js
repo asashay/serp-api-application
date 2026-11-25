@@ -112,9 +112,13 @@ export default class extends Controller {
     this.elapsedTimer = setInterval(tick, 250)
   }
 
+  // Each page gets a new frame: Chrome can leave a sandboxed frame blank when
+  // its srcdoc is replaced with a large page, while a new frame shows it.
   showPage(html) {
-    this.pageTarget.srcdoc = html || ""
-    this.pageTarget.hidden = !html
+    const frame = this.pageTarget.cloneNode(false)
+    frame.srcdoc = html || ""
+    frame.hidden = !html
+    this.pageTarget.replaceWith(frame)
     this.pageEmptyTarget.hidden = Boolean(html)
   }
 

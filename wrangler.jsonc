@@ -10,7 +10,7 @@
   ],
   "vars": {
     "PUBLIC_ORIGIN": "https://serp-api-demo.alexoliynyk.me",
-    "RENDERER_CONFIG_VERSION": "2"
+    "RENDERER_CONFIG_VERSION": "3"
   },
   "triggers": { "crons": [ "*/5 * * * *" ] },
   "observability": {

@@ -24,11 +24,11 @@ module GoogleSearch
       end
     end
 
-    # nil (a page over Preview::LIMIT) is cached too, so it is not rebuilt per request.
     def self.location
       Location.find(LOCATION)
     end
 
+    # Built once; nil (a page Nokogiri could not parse) is cached too.
     def self.preview_html
       return @preview_html if defined?(@preview_html)
 

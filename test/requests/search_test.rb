@@ -166,11 +166,34 @@ class SearchTest < ActionDispatch::IntegrationTest
         ENV["CLOUDFLARE_CONTAINER"] = previous_container
       end
       assert_response :success
-      response.parsed_body["preview_html"]
+      [ response.parsed_body["preview_html"], response.headers["X-Render-Log"] ]
     end
 
-    assert_includes previews.first, "Content-Security-Policy"
-    assert_nil previews.last
+    assert_includes previews.first.first, "Content-Security-Policy"
+    assert_equal "preview kib=#{previews.first.first.bytesize / 1024}", previews.first.last
+    assert_equal [ nil, nil ], previews.last
+  end
+
+  test "logs a preview that could not be built after the renderer's summary" do
+    query = GoogleSearch::Example::QUERY
+    renderer = Struct.new(:log) do
+      def call(url, location: nil) = [ url, GoogleSearch::Example.html ]
+    end.new("render outcome=ok")
+    previous_container = ENV["CLOUDFLARE_CONTAINER"]
+    begin
+      ENV["CLOUDFLARE_CONTAINER"] = "1"
+      PageCapture::Renderer.stub(:new, -> { renderer }) do
+        GoogleSearch::Preview.stub(:new, ->(_html) { Struct.new(:call).new(nil) }) do
+          post "/internal/capture", params: { query: query, preview: true }, as: :json
+        end
+      end
+    ensure
+      ENV["CLOUDFLARE_CONTAINER"] = previous_container
+    end
+
+    assert_response :success
+    assert_nil response.parsed_body["preview_html"]
+    assert_equal "render outcome=ok | preview none", response.headers["X-Render-Log"]
   end
 
   test "accepts one optional location from the shared list" do

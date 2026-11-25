@@ -49,12 +49,12 @@ class GoogleSearchPreviewTest < Minitest::Test
     assert_match(/a, button.*pointer-events: none !important/m, page.at_css("head style").text)
   end
 
-  def test_builds_a_head_for_a_fragment_and_drops_oversized_pages
+  def test_builds_a_head_for_a_fragment_and_keeps_large_pages
     preview = GoogleSearch::Preview.new("<div>Fragment</div>").call
     assert_includes preview, "Content-Security-Policy"
     assert_includes preview, "Fragment"
 
-    huge = "<div>#{'a' * (GoogleSearch::Preview::LIMIT + 1)}</div>"
-    assert_nil GoogleSearch::Preview.new(huge).call
+    large = "<div>#{'a' * (3 * 1024 * 1024)}</div>"
+    assert_operator GoogleSearch::Preview.new(large).call.bytesize, :>, 3 * 1024 * 1024
   end
 end

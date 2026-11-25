@@ -49,7 +49,7 @@ export class RailsContainer extends DurableObject {
       container.start({
         image,
         labels: { rendererConfig: configVersion },
-        instance: { vcpu: 0.25, memoryMib: 1024, diskMb: 4000 },
+        instance: { vcpu: 2, memoryMib: 8192, diskMb: 16000 },
         enableInternet: true,
         env: { CLOUDFLARE_CONTAINER: "1", PUBLIC_ORIGIN: this.env.PUBLIC_ORIGIN, ...proxy },
       })

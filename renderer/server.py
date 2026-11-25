@@ -221,7 +221,7 @@ class Renderer:
                 return web.Response(status=503)
 
             outcome = "ok"
-            timings.note(kib=len(html) // 1024)
+            timings.note(kib=len(html) // 1024, **probe_fields(document.get("probe")))
             return web.Response(body=html, content_type="text/html", charset="utf-8",
                                 headers={"X-Page-Url": document["url"]})
         except asyncio.CancelledError:
@@ -244,6 +244,14 @@ class Renderer:
                 self.closing = closing
             else:
                 await closing
+
+
+def probe_fields(probe):
+    """capture.js's structural facts about the page, made safe for one log line."""
+    if not isinstance(probe, dict):
+        return {}
+    return {name: re.sub(r"[^\w./-]", "", str(value))[:40] for name, value in probe.items()
+            if re.fullmatch(r"[a-z_]{1,20}", str(name))}
 
 
 async def challenged(page):
