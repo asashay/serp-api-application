@@ -53,7 +53,7 @@ Cloudflare Container, 1 GiB, linux/amd64    one instance, kept warm
 
 ### Design choices
 
-- **One container.** Rails and Firefox share an instance, so the renderer is reachable only over loopback. The container restarts as a unit when the image or `RENDERER_CONFIG_VERSION` changes. A freshly started container holds requests until Firefox answers its health check.
+- **One container.** Rails and Firefox share an instance, so the renderer is reachable only over loopback. Puma runs 8 threads, because each live search holds one for up to 64 seconds while the renderer works; the rest keep the page and health check answering. The container restarts as a unit when the image or `RENDERER_CONFIG_VERSION` changes. A freshly started container holds requests until Firefox answers its health check.
 - **Destinations are checked in depth.** Rails builds a fixed Google search URL. The Playwright route filter, the CONNECT guard and the final-URL check restrict traffic to the authorized Google origins.
 - **Quota is spent only on admitted attempts.** Invalid queries, unknown locations and rate-limited requests consume nothing. An admitted capture counts even if it fails. A capture that arrives while another is running waits within its own deadline.
 - **The page is ready when its HTML is parsed.** Google sends the results in the HTML, so an attempt waits for `domcontentloaded`, capped at 12 seconds. It then waits up to 4 more seconds for the full load, because Google's scripts fill in most result images (inline `data:` URIs) while the page loads. A slow subresource costs at most those 4 seconds (logged as `loaded=no`) instead of the whole deadline.
@@ -129,7 +129,7 @@ Then build and start the image with live search turned on:
 ```sh
 docker buildx build --platform linux/amd64 --load -t serp-api-demo .
 docker run --rm --platform linux/amd64 -p 3000:3000 --env-file .env.renderer \
-  -e LOCAL_LIVE_SEARCH=1 -e RENDER_TIMEOUT_SECONDS=120 serp-api-demo
+  -e LOCAL_LIVE_SEARCH=1 -e RENDER_TIMEOUT_SECONDS=240 serp-api-demo
 ```
 
 - `LOCAL_LIVE_SEARCH=1` sends `/search.json` and `/playground/search` through the renderer for any query. There is no cooldown or monthly cap, so every search uses proxy traffic.
