@@ -8,14 +8,14 @@ Search Lab is a small Google Search API: it renders a real Google results page i
 # Saved example: no quota, no proxy traffic
 curl -sS 'https://serp-api-demo.alexoliynyk.me/example.json'
 
-# Live search from Austin, Texas
-curl -sS 'https://serp-api-demo.alexoliynyk.me/search.json?q=best+matcha+bar&location=Austin%2C+Texas%2C+United+States'
+# Live search from any location
+curl -sS 'https://serp-api-demo.alexoliynyk.me/search.json?q=best+matcha+bar'
 ```
 
 ## What it does
 
 - **Live Google results as JSON.** Each result has `position`, `title`, `link`, `snippet`, and, when Google shows them, `redirect_link`, `displayed_link`, `source`, `favicon`, `date` and `snippet_highlighted_words`. The response also has `search_metadata`, `search_parameters`, `search_information` and `pagination`, using SerpApi's field names.
-- **Locations.** `location` runs the search from Austin or Paris. The exit IP is in that city, and Google gets the matching `gl` and `uule`.
+- **Locations.** Searches run from any location by default. The optional `location` runs one from Austin or Paris instead. The exit IP is in that city, and Google gets the matching `gl` and `uule`.
 - **A side-by-side playground.** The captured page is shown in a sandboxed frame, stripped of scripts and links, next to the JSON the parser produced from it. You can check every field against what Google showed.
 - **A shared budget.** The public API and the playground share one live search every 10–15 seconds and 400 per month, enforced before any proxy traffic is spent.
 
@@ -44,7 +44,8 @@ The stack:
 
 ## Problems worth a closer look
 
-- **Challenges.** The renderer recognizes Google's challenge pages (HTTP 403/429, the `/sorry/` URL or a captcha). It then retries on a new exit IP, up to three attempts, as long as the 30-second deadline leaves room for another. If no attempt gets through, the API returns a clear 502 instead of an empty result.
+- **Challenges and slow IPs.** The renderer recognizes Google's challenge pages (HTTP 403/429, the `/sorry/` URL or a captcha). It also gives each exit IP 12 seconds to deliver the HTML. In either case it retries on a new IP, up to three attempts, as long as the 30-second deadline leaves room for another. If no attempt gets through, the API returns a clear 502 or 504 instead of an empty result.
+- **Waiting only for what matters.** The results are in Google's HTML, so a capture starts once the page is parsed. It then allows a few seconds for Google's scripts to fill in the result images, rather than waiting for every subresource through the proxy. Each attempt logs how long every step took, without queries or URLs.
 - **Opaque result links.** Google now links results through `/goto` URLs. Inside the page, the renderer follows each redirect without navigating, one at a time and within a time budget, and records the destination. When it can't, `link` falls back to Google's URL, which still works in a browser.
 - **Consent dialogs.** European exit IPs get a cookie consent modal over the results. The renderer removes the dialog and its backdrop, and unlocks scrolling, in the page itself. It never posts a choice to Google.
 - **Location.** Google trusts the `uule` parameter more than IP geolocation. Search Lab sends both: a `uule` built from the canonical place name, and an exit IP in the same city. Austin and Paris were confirmed on Google's own results page. Other cities were dropped when the proxy's city targeting didn't place them reliably.

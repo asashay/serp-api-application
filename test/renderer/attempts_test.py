@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "renderer"))
-from attempts import CHALLENGE, render_deadline, with_fresh_ips
+from attempts import CHALLENGE, SLOW, render_deadline, with_fresh_ips
 
 
 class Response:
@@ -58,6 +58,14 @@ class WithFreshIpsTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(503, response.status)
         self.assertEqual(1, attempts.sessions)
+
+    async def test_retries_a_slow_exit_ip_like_a_challenge(self):
+        attempts = Attempts([SLOW, CHALLENGE, 200])
+
+        response = await with_fresh_ips(attempts, attempts.new_session, self.deadline(30), min_seconds=1)
+
+        self.assertEqual(200, response.status)
+        self.assertEqual(3, attempts.sessions)
 
     async def test_returns_the_challenge_after_the_last_attempt(self):
         attempts = Attempts([CHALLENGE] * 5)

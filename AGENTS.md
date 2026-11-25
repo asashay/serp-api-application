@@ -46,7 +46,7 @@ Cloudflare Container, 1 GiB, linux/amd64    one instance, kept warm
 | SearchGate | `worker/index.mjs`, `worker/search.mjs` | One global Durable Object. Atomically enforces the cooldown and the monthly cap. |
 | Locations | `config/locations.json` | The only list of places. The Worker validates names against it, Rails takes `gl` and the `uule` name from it, and the renderer takes the DataImpulse targeting (`cr.us;city.austin`) from it. |
 | Rails | `app/controllers/capture_controller.rb`, `app/services/google_search/` | `Query` parses the request and builds the Google URL. `Location` loads the locations and computes `uule`. `PageCapture::Renderer` calls the loopback renderer. `Parser` extracts organic results, search information and pagination. `Response` builds the public JSON. `Preview` sanitizes the page for the playground. `Example` serves the saved capture. |
-| Renderer | `renderer/server.py` and modules beside it | Keeps one Firefox process running and runs one capture at a time. `attempts.py` retries challenges on a fresh proxy session. `consent.js` / `consent.py` remove Google's consent dialog. `links.py` resolves `/goto` links. `capture.js` serializes the DOM without scripts, embedded documents or external stylesheets; inline styles stay. `locations.py` maps a location name to proxy targeting. |
+| Renderer | `renderer/server.py` and modules beside it | Keeps one Firefox process running and runs one capture at a time. `attempts.py` retries challenges on a fresh proxy session. `consent.js` / `consent.py` remove Google's consent dialog. `links.py` resolves `/goto` links. `capture.js` serializes the DOM without scripts, embedded documents or external stylesheets; inline styles stay. `locations.py` maps a location name to proxy targeting. `timings.py` builds the per-step timing log lines. |
 | Proxy guard | `renderer/proxy.py` | Accepts only Google and static-origin CONNECT tunnels from Firefox. Forwards them to DataImpulse, adding the credentials and a per-attempt `sessid`. |
 | Process supervisor | `renderer/supervisord.conf` | Runs Puma and the renderer side by side. Restarts either one if it exits. Blanks the proxy secrets for Puma. |
 | Playground | `app/views/playground/`, `app/javascript/playground_controller.js`, `app/assets/stylesheets/application.css` | Search box, location select, a sandboxed link-free copy of the results page, a loading indicator, and the JSON response. Starts from the saved capture, which uses no quota. |
@@ -56,10 +56,12 @@ Cloudflare Container, 1 GiB, linux/amd64    one instance, kept warm
 - **One container.** Rails and Firefox share an instance, so the renderer is reachable only over loopback. The container restarts as a unit when the image or `RENDERER_CONFIG_VERSION` changes. A freshly started container holds requests until Firefox answers its health check.
 - **Destinations are checked in depth.** Rails builds a fixed Google search URL. The Playwright route filter, the CONNECT guard and the final-URL check restrict traffic to the authorized Google origins.
 - **Quota is spent only on admitted attempts.** Invalid queries, unknown locations and rate-limited requests consume nothing. An admitted capture counts even if it fails. A capture that arrives while another is running waits within its own deadline.
-- **Challenges retry on a new IP.** A capture that meets a challenge (HTTP 403/429, a `/sorry/` URL or a captcha) retries from a new DataImpulse session, up to three attempts, while at least a third of the deadline remains.
+- **The page is ready when its HTML is parsed.** Google sends the results in the HTML, so an attempt waits for `domcontentloaded`, capped at 12 seconds. It then waits up to 4 more seconds for the full load, because Google's scripts fill in most result images (inline `data:` URIs) while the page loads. A slow subresource costs at most those 4 seconds (logged as `loaded=no`) instead of the whole deadline.
+- **Challenges and slow IPs retry on a new IP.** A capture that meets a challenge (HTTP 403/429, a `/sorry/` URL or a captcha), or whose exit IP doesn't deliver the HTML within 12 seconds, retries from a new DataImpulse session. It makes up to three attempts, while at least a third of the deadline remains. When every attempt was slow, the API returns 504 `upstream_timeout`. (The 12- and 4-second waits scale with `RENDER_TIMEOUT_SECONDS`.)
 - **`/goto` links are resolved in the page.** The renderer fetches each `/goto` URL with `redirect: "manual"`, one at a time with a short gap, and reads the `Location` header from the response event. It rewrites the link and keeps the original in `data-goto`. It stops when the time budget (a sixth of the deadline) runs out.
 - **The consent dialog is removed, not answered.** `consent.js` removes the dialog, its full-screen backdrop and `aria-hidden`/`inert`, and unlocks scrolling. Nothing is posted to `consent.google.com`.
-- **Logs carry no content.** Rails tags its log lines with the request ID and filters `q`, `query` and `html`. The renderer logs only browser error codes and proxy status codes.
+- **Logs carry no content.** Rails tags its log lines with the request ID and filters `q`, `query` and `html`. The renderer logs only browser error codes, proxy status codes and step timings.
+- **Every render logs its timings.** Each attempt logs one line, `attempt N outcome=… context_ms load_ms google_status loaded images_ms consent_ms links_resolved links_ms serialize_ms kib close_ms total_ms`, and the request ends with `render outcome=… queue_ms attempts_ms attempts located total_ms`. When a timeout or error interrupts an attempt or the render, `stopped_in` names the step. A successful attempt closes its browser context after answering, so the close never turns a captured page into a timeout; the next capture waits for it. To see where a slow search spent its time, search the container logs for `render outcome=timeout`. `renderer/timings.py` builds these lines.
 - **Parsing is independent.** `GoogleSearch::Parser` reads saved HTML without network or browser dependencies, recognizes challenge and zero-result pages, unwraps Google redirect links, and caps output at ten organic results. Its tests use real captured pages.
 
 ## API contract
@@ -92,7 +94,7 @@ Errors have `error.code`, `error.message` and `request_id`:
 | 502 | `upstream_challenge` | Every attempt met a challenge |
 | 502 | `unknown_layout` | The parser recognized no results |
 | 503 | `upstream_unavailable`, `search_unavailable` | The renderer or container is not ready |
-| 504 | `upstream_timeout` | The 30-second deadline passed |
+| 504 | `upstream_timeout` | The 30-second deadline passed, or every exit IP was too slow |
 
 The public API and playground share a 10–15 second cooldown and 400 admitted captures per UTC calendar month. The renderer has a 30-second deadline and a 5 MiB output limit; the preview is capped at 2 MiB.
 
@@ -150,7 +152,7 @@ npm run test:browser                                             # Playwright: p
 ```
 
 - Parser tests (`test/services/google_search_parser_test.rb`) run standalone against `test/fixtures/google_search/`. The `live/` fixtures are trimmed real captures of `/goto` link layouts.
-- Renderer tests mock the browser and the proxy; nothing reaches the network.
+- Renderer tests mock the browser and the proxy; nothing reaches the network. `server_test.py` runs the render flow against a fake browser and checks its timing logs; it uses stand-ins for aiohttp and invisible-playwright when they are not installed.
 - Browser tests run the playground against Rails and fulfill live searches with routed responses.
 
 ## Deploy

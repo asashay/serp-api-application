@@ -11,11 +11,12 @@ from aiohttp import web
 from invisible_playwright.async_api import InvisiblePlaywright
 from invisible_playwright._pw.async_api import Error, TimeoutError as BrowserTimeout
 
-from attempts import CHALLENGE, render_deadline, with_fresh_ips
+from attempts import CHALLENGE, SLOW, render_deadline, with_fresh_ips
 from consent import remove_consent
 from links import resolve_goto_links
 from locations import targeting
 from proxy import Proxy, PROXY_PORT
+from timings import Timings
 
 DIRECTORY = Path(__file__).parent
 CAPTURE = (DIRECTORY / "capture.js").read_text()
@@ -31,7 +32,13 @@ RESOLVE_SECONDS = 5 * DEADLINE / 30
 # Left after resolving for the DOM capture and the response.
 CAPTURE_MARGIN_SECONDS = 3
 CLOSE_TIMEOUT = 2 * DEADLINE / 30
-# Start another attempt after a challenge only if a page load still fits.
+# An exit IP gets this long to deliver Google's HTML; a slower one is replaced
+# by a new IP while there is still time for another attempt.
+LOAD_SECONDS = 12 * DEADLINE / 30
+# After the HTML, how long to wait for the full load, which fills in the
+# result images. A slow subresource then costs at most this, not the deadline.
+IMAGES_SECONDS = 4 * DEADLINE / 30
+# Start another attempt after a challenge or slow IP only if a page load still fits.
 RETRY_MIN_SECONDS = 10 * DEADLINE / 30
 CHALLENGE_SELECTOR = 'form#captcha-form, form[action*="/sorry/"], iframe[src*="/recaptcha/"]'
 
@@ -55,6 +62,9 @@ class Renderer:
         self.browser = browser
         self.proxy = proxy
         self.capture_lock = asyncio.Lock()
+        # The close of the last successful capture, which runs after its
+        # response so it cannot push a finished page past the deadline.
+        self.closing = None
 
     async def health(self, _request):
         return web.Response(status=200 if self.browser.is_connected() else 503)
@@ -75,25 +85,48 @@ class Renderer:
         # An admitted capture has already used quota, so wait for a running
         # render to finish instead of failing. The deadline covers the wait.
         deadline = asyncio.get_running_loop().time() + DEADLINE
+        timings = Timings()
+        timings.begin("queue")
+        attempts = 0
+
+        async def attempt(remaining):
+            nonlocal attempts
+            attempts += 1
+            return await self.capture(url, remaining, attempts)
+
+        outcome = "error"
         try:
             async with asyncio.timeout(DEADLINE):
                 async with self.capture_lock:
-                    return await with_fresh_ips(
-                        lambda remaining: self.capture(url, remaining),
-                        lambda: self.proxy.new_session(location), deadline, RETRY_MIN_SECONDS,
+                    timings.begin("attempts")
+                    response = await with_fresh_ips(
+                        attempt, lambda: self.proxy.new_session(location), deadline, RETRY_MIN_SECONDS,
                     )
+                    timings.finish()
+                    outcome = {200: "ok", CHALLENGE: "challenge", SLOW: "slow"}.get(
+                        response.status, f"status_{response.status}")
+                    return web.Response(status=504) if response.status == SLOW else response
         except (BrowserTimeout, TimeoutError):
-            LOG.warning("capture timed out")
+            outcome = "timeout"
             return web.Response(status=504)
         except Error as error:
             # Log only the browser's error code; messages can contain the URL.
             code = re.search(r"\bNS_[A-Z_]+|\bnet::[A-Z_]+", str(error))
-            LOG.warning("browser capture failed: %s", code[0] if code else type(error).__name__)
+            outcome = "browser_error"
+            timings.note(error=code[0] if code else type(error).__name__)
             return web.Response(status=503)
+        finally:
+            timings.note(attempts=attempts, located="yes" if location else "no")
+            LOG.info("render %s", timings.line(outcome))
 
-    async def capture(self, url, remaining):
+    async def capture(self, url, remaining, number=1):
         loop = asyncio.get_running_loop()
         ends_at = loop.time() + remaining
+        timings = Timings()
+        timings.begin("context")
+        outcome = "error"
+        if self.closing:
+            await asyncio.wait({self.closing})
         context = await self.browser.new_context(
             proxy={"server": f"http://127.0.0.1:{PROXY_PORT}"},
             viewport={"width": 1366, "height": 900},
@@ -110,33 +143,89 @@ class Renderer:
         try:
             await context.route("**/*", restrict)
             page = await context.new_page()
-            response = await page.goto(url, wait_until="load", timeout=max(1, remaining - 3) * 1000)
+            # Google sends the results in the HTML, so the page is usable once
+            # it is parsed; images get a short wait of their own below.
+            timings.begin("load")
+            try:
+                response = await page.goto(url, wait_until="domcontentloaded",
+                                           timeout=max(1, min(LOAD_SECONDS, remaining - 3)) * 1000)
+            except BrowserTimeout:
+                timings.finish()
+                outcome = "slow"
+                return web.Response(status=SLOW)
+            timings.finish()
             if response is None or not allowed_url(page.url):
+                outcome = "off_site"
                 return web.Response(status=503)
+            timings.note(google_status=response.status)
             if (response.status in (403, 429) or urlsplit(page.url).path.startswith("/sorry/")
                     or await page.locator(CHALLENGE_SELECTOR).count()):
+                outcome = "challenge"
                 return web.Response(status=CHALLENGE)
             if not response.ok:
+                outcome = "google_error"
                 return web.Response(status=503)
 
+            # Google's scripts set most result images (inline data: URIs)
+            # while the page loads. Wait for that briefly, then capture anyway.
+            timings.begin("images")
+            wait = min(IMAGES_SECONDS, ends_at - loop.time() - CAPTURE_MARGIN_SECONDS)
+            loaded = False
+            if wait > 0:
+                try:
+                    await page.wait_for_load_state("load", timeout=wait * 1000)
+                    loaded = True
+                except Error:
+                    pass
+            timings.note(loaded="yes" if loaded else "no")
+
+            timings.begin("consent")
             await remove_consent(page)
 
-            # The page has loaded, so a slow resolution must not turn it into a
+            # The page is ready, so a slow resolution must not turn it into a
             # timeout: resolve only within what is left, else keep /goto links.
             budget = min(RESOLVE_SECONDS, ends_at - loop.time() - CAPTURE_MARGIN_SECONDS)
+            timings.begin("links")
             if budget > 0:
-                resolved = await resolve_goto_links(context, page, timeout=budget)
-                if resolved:
-                    LOG.info("resolved %d result links", resolved)
+                timings.note(links_resolved=await resolve_goto_links(context, page, timeout=budget))
+            timings.begin("serialize")
             document = await page.evaluate(CAPTURE)
             html = document["html"].encode()
+            timings.finish()
             if len(html) > MAX_BYTES or not allowed_url(document["url"]):
+                outcome = "too_large_or_off_site"
                 return web.Response(status=503)
 
+            outcome = "ok"
+            timings.note(kib=len(html) // 1024)
             return web.Response(body=html, content_type="text/html", charset="utf-8",
                                 headers={"X-Page-Url": document["url"]})
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        except (BrowserTimeout, TimeoutError):
+            outcome = "timeout"
+            raise
         finally:
-            await close_or_restart(context)
+            # Name the step an error or the deadline interrupted.
+            if timings.step:
+                timings.note(stopped_in=timings.step)
+            timings.begin("close")
+            closing = asyncio.ensure_future(close_and_log(context, timings, number, outcome))
+            if outcome == "ok":
+                # The page is captured: answer now and let the next capture
+                # wait for this close instead.
+                self.closing = closing
+            else:
+                await closing
+
+
+async def close_and_log(context, timings, number, outcome):
+    try:
+        await close_or_restart(context)
+        timings.finish()
+    finally:
+        LOG.info("attempt %d %s", number, timings.line(outcome))
 
 
 async def close_or_restart(context):
