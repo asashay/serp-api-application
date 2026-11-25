@@ -28,6 +28,19 @@ class Timings:
     def note(self, **fields):
         self.fields.update(fields)
 
+    def snapshot(self, outcome):
+        """The line so far, without finishing anything: for a summary sent on."""
+        fields = dict(self.fields)
+        now = self.clock()
+        parts = [f"outcome={outcome}"]
+        if self.step:
+            if "stopped_in" not in fields:
+                parts.append(f"stopped_in={self.step}")
+            fields[f"{self.step}_ms"] = round((now - self.step_started) * 1000)
+        parts += [f"{name}={value}" for name, value in fields.items()]
+        parts.append(f"total_ms={round((now - self.started) * 1000)}")
+        return " ".join(parts)
+
     def line(self, outcome):
         """The log line. An unfinished step is timed so far and named as `stopped_in`."""
         unfinished = self.step

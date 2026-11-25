@@ -5,12 +5,12 @@ module PageCapture
     LIMIT = 5 * 1024 * 1024
     ENDPOINT = URI("http://127.0.0.1:3800")
     # The renderer's deadline plus headroom. renderer/server.py reads
-    # RENDER_TIMEOUT_SECONDS with the same rules: finite and above 60, else 60.
+    # RENDER_TIMEOUT_SECONDS with the same rules: finite and above 110, else 110.
     def self.deadline(value)
-      seconds = Float(value.presence || 60)
-      seconds.finite? && seconds > 60 ? seconds : 60.0
+      seconds = Float(value.presence || 110)
+      seconds.finite? && seconds > 110 ? seconds : 110.0
     rescue ArgumentError, TypeError
-      60.0
+      110.0
     end
 
     READ_TIMEOUT = deadline(ENV["RENDER_TIMEOUT_SECONDS"]) + 4
@@ -24,12 +24,20 @@ module PageCapture
       end
     end
 
+    # The renderer's timing summary for the last call: step durations, status
+    # codes and outcomes, never content. Cloudflare does not keep the
+    # container's output, so it travels back to the Worker, which logs it.
+    LOG_HEADER = "X-Render-Log".freeze
+    LOG_LIMIT = 2000
+    attr_reader :log
+
     # location: a name from config/locations.json; the renderer picks an exit
     # IP there. nil uses any exit IP.
     def call(url, location: nil)
       request = Net::HTTP::Post.new("/render", "Content-Type" => "application/json")
       request.body = JSON.generate({ url: url, location: location }.compact)
       http(read_timeout: READ_TIMEOUT).request(request) do |response|
+        @log = response[LOG_HEADER]&.gsub(/[^ -~]/, "")&.slice(0, LOG_LIMIT)
         case response.code.to_i
         when 200
           html = +"".b

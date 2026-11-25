@@ -24,24 +24,28 @@ MAX_BYTES = 5 * 1024 * 1024
 LOG = logging.getLogger("renderer")
 
 
-# Production keeps the 60-second deadline, which leaves room for several
-# fresh exit IPs. A slow local run (for example Firefox under x86 emulation)
-# can raise it with RENDER_TIMEOUT_SECONDS; every step budget below scales with
-# it, so at the default they are the seconds written in each fraction.
+# Production keeps the 110-second deadline: room for several fresh exit IPs,
+# and still under Cloudflare's 125-second proxy read timeout with Rails' 4 s
+# on top. A slow local run (for example Firefox under x86 emulation) can raise
+# it with RENDER_TIMEOUT_SECONDS, and every step budget below grows with it.
+DEFAULT_DEADLINE = 110
 DEADLINE = render_deadline(os.environ.get("RENDER_TIMEOUT_SECONDS"))
+SCALE = DEADLINE / DEFAULT_DEADLINE
 # Time /goto link resolution may take; it never eats into the capture margin.
-RESOLVE_SECONDS = 5 * DEADLINE / 60
+RESOLVE_SECONDS = 10 * SCALE
 # Left after resolving for the DOM capture and the response.
 CAPTURE_MARGIN_SECONDS = 3
-CLOSE_TIMEOUT = 2 * DEADLINE / 60
+CLOSE_TIMEOUT = 4 * SCALE
 # An exit IP gets this long to deliver Google's HTML; a slower one is replaced
 # by a new IP while there is still time for another attempt.
-LOAD_SECONDS = 12 * DEADLINE / 60
+LOAD_SECONDS = 24 * SCALE
 # After the HTML, how long to wait for the full load, which fills in the
 # result images. A slow subresource then costs at most this, not the deadline.
-IMAGES_SECONDS = 4 * DEADLINE / 60
+IMAGES_SECONDS = 8 * SCALE
 # Start another attempt after a challenge or slow IP only if a page load still fits.
-RETRY_MIN_SECONDS = 10 * DEADLINE / 60
+RETRY_MIN_SECONDS = 20 * SCALE
+# The response header that carries the render's timing summary (no content).
+RENDER_LOG = "X-Render-Log"
 CHALLENGE_SELECTOR = 'form#captcha-form, form[action*="/sorry/"], iframe[src*="/recaptcha/"]'
 
 
@@ -90,13 +94,15 @@ class Renderer:
         timings = Timings()
         timings.begin("queue")
         attempts = 0
+        summaries = []
 
         async def attempt(remaining):
             nonlocal attempts
             attempts += 1
-            return await self.capture(url, remaining, attempts)
+            return await self.capture(url, remaining, attempts, summaries)
 
         outcome = "error"
+        response = None
         try:
             async with asyncio.timeout(DEADLINE):
                 async with self.capture_lock:
@@ -107,21 +113,28 @@ class Renderer:
                     timings.finish()
                     outcome = {200: "ok", CHALLENGE: "challenge", SLOW: "slow"}.get(
                         response.status, f"status_{response.status}")
-                    return web.Response(status=504) if response.status == SLOW else response
+                    if response.status == SLOW:
+                        response = web.Response(status=504)
         except (BrowserTimeout, TimeoutError):
             outcome = "timeout"
-            return web.Response(status=504)
+            response = web.Response(status=504)
         except Error as error:
             # Log only the browser's error code; messages can contain the URL.
             code = re.search(r"\bNS_[A-Z_]+|\bnet::[A-Z_]+", str(error))
             outcome = "browser_error"
             timings.note(error=code[0] if code else type(error).__name__)
-            return web.Response(status=503)
+            response = web.Response(status=503)
         finally:
             timings.note(attempts=attempts, located="yes" if location else "no")
-            LOG.info("render %s", timings.line(outcome))
+            line = timings.line(outcome)
+            LOG.info("render %s", line)
 
-    async def capture(self, url, remaining, number=1):
+        # The container's output is not kept by Cloudflare, so the same
+        # summary goes back to Rails and on to the Worker, whose logs are.
+        response.headers[RENDER_LOG] = " | ".join([f"render {line}", *summaries])
+        return response
+
+    async def capture(self, url, remaining, number=1, summaries=None):
         loop = asyncio.get_running_loop()
         ends_at = loop.time() + remaining
         timings = Timings()
@@ -221,6 +234,8 @@ class Renderer:
             # Name the step an error or the deadline interrupted.
             if timings.step:
                 timings.note(stopped_in=timings.step)
+            if summaries is not None:
+                summaries.append(f"attempt {number} {timings.snapshot(outcome)}")
             timings.begin("close")
             closing = asyncio.ensure_future(close_and_log(context, timings, number, outcome))
             if outcome == "ok":

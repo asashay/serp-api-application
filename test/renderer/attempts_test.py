@@ -29,13 +29,13 @@ class Attempts:
 
 
 class RenderDeadlineTest(unittest.TestCase):
-    def test_raises_only_with_finite_values_above_sixty(self):
-        self.assertEqual(120.0, render_deadline("120"))
-        self.assertEqual(75.5, render_deadline("75.5"))
+    def test_raises_only_with_finite_values_above_110(self):
+        self.assertEqual(240.0, render_deadline("240"))
+        self.assertEqual(150.5, render_deadline("150.5"))
         with self.assertLogs("renderer", "WARNING"):
-            self.assertEqual(60.0, render_deadline("75s"))
-        for value in (None, "", "10", "45", "-5", "inf", "nan"):
-            self.assertEqual(60.0, render_deadline(value), value)
+            self.assertEqual(110.0, render_deadline("150s"))
+        for value in (None, "", "10", "60", "110", "-5", "inf", "nan"):
+            self.assertEqual(110.0, render_deadline(value), value)
 
 
 class WithFreshIpsTest(unittest.IsolatedAsyncioTestCase):

@@ -81,6 +81,45 @@ class SearchTest < ActionDispatch::IntegrationTest
     renderer.verify
   end
 
+  class LoggingRenderer
+    attr_reader :log
+
+    def initialize(log)
+      @log = log
+    end
+
+    def call(_url, location: nil)
+      raise PageCapture::Renderer::Error.new("upstream_challenge", "Google returned a challenge page.", 502)
+    end
+  end
+
+  test "passes the renderer's timing summary to the Worker only from the internal capture" do
+    summary = "render outcome=challenge attempts=5 total_ms=40000 | attempt 1 outcome=challenge challenge_at=load"
+    previous = ENV["CLOUDFLARE_CONTAINER"]
+    begin
+      ENV["CLOUDFLARE_CONTAINER"] = "1"
+      PageCapture::Renderer.stub(:new, -> { LoggingRenderer.new(summary) }) do
+        post "/internal/capture", params: { query: "rails" }, as: :json
+      end
+    ensure
+      ENV["CLOUDFLARE_CONTAINER"] = previous
+    end
+    assert_response :bad_gateway
+    assert_equal summary, response.headers["X-Render-Log"]
+
+    previous = ENV["LOCAL_LIVE_SEARCH"]
+    begin
+      ENV["LOCAL_LIVE_SEARCH"] = "1"
+      PageCapture::Renderer.stub(:new, -> { LoggingRenderer.new(summary) }) do
+        get "/search.json", params: { q: "rails" }
+      end
+    ensure
+      ENV["LOCAL_LIVE_SEARCH"] = previous
+    end
+    assert_response :bad_gateway
+    assert_nil response.headers["X-Render-Log"]
+  end
+
   test "keeps the capture route internal" do
     post "/internal/capture", params: { query: "Rails" }, as: :json
     assert_response :not_found

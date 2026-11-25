@@ -52,8 +52,12 @@ class CaptureController < ActionController::API
 
   def render_live(query, location, queued_ms: 0)
     started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    _final_url, html = PageCapture::Renderer.new.call(GoogleSearch::Query.url(query, location: location),
-      location: location&.name)
+    renderer = PageCapture::Renderer.new
+    begin
+      _final_url, html = renderer.call(GoogleSearch::Query.url(query, location: location), location: location&.name)
+    ensure
+      pass_render_log(renderer)
+    end
     elapsed_ms = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000
     render_capture(html, query: query, location: location, source: "google", elapsed_ms: queued_ms + elapsed_ms.round)
   end
@@ -97,6 +101,16 @@ class CaptureController < ActionController::API
 
   def invalid_location
     render_error("invalid_location", "Use one of these locations: #{GoogleSearch::Location.names.join('; ')}.", 400)
+  end
+
+  # Hands the renderer's timing summary to the Worker for its logs. Only the
+  # internal capture route answers the Worker; the public API never shows it.
+  def pass_render_log(renderer)
+    log = renderer.log if renderer.respond_to?(:log)
+    return unless log.present?
+
+    Rails.logger.info { log }
+    response.set_header(PageCapture::Renderer::LOG_HEADER, log) if action_name == "capture"
   end
 
   def render_search_error(error)

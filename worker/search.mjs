@@ -101,6 +101,15 @@ export async function handleSearch(request, url, env) {
       // Only the playground shows the captured page next to the JSON.
       body: JSON.stringify({ query, location, elapsed_ms: Date.now() - startedAt, preview: !isPublic }),
     }))
+    // One line per admitted search, with the renderer's timing summary
+    // (durations, status codes, outcomes; no query or URL) when Rails got one.
+    // Cloudflare keeps Worker logs but not the container's output, so this is
+    // where a slow or failed search can be diagnosed. The summary is never
+    // forwarded to the client.
+    console.log({
+      request_id: requestId, status: upstream.status, elapsed_ms: Date.now() - startedAt,
+      render: upstream.headers.get("X-Render-Log"),
+    })
     if (upstream.headers.get("X-Search-Response") !== "1" ||
         !upstream.headers.get("Content-Type")?.startsWith("application/json")) {
       await upstream.body?.cancel()

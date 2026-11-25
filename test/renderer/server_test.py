@@ -171,6 +171,9 @@ class RenderTest(unittest.IsolatedAsyncioTestCase):
         response, lines = await self.render(status(429), status(200))
 
         self.assertEqual(response.status, 200)
+        self.assertRegex(response.headers[server.RENDER_LOG],
+                         r"^render outcome=ok .*attempts=2 .* \| attempt 1 outcome=challenge .*challenge_at=load"
+                         r".* \| attempt 2 outcome=ok .*kib=0 total_ms=\d+$")
         self.assertRegex(line(lines, "attempt 1"), r"^attempt 1 outcome=challenge .*google_status=429")
         self.assertTrue(any(line.startswith("attempt 2 outcome=ok ") for line in lines))
         self.assertRegex(line(lines, "render"), r"^render outcome=ok .* attempts=2 ")
@@ -200,6 +203,7 @@ class RenderTest(unittest.IsolatedAsyncioTestCase):
         response, lines = await self.render(*[slow] * attempts.MAX_ATTEMPTS)
 
         self.assertEqual(response.status, 504)
+        self.assertEqual(response.headers[server.RENDER_LOG].count("outcome=slow"), 1 + attempts.MAX_ATTEMPTS)
         self.assertRegex(line(lines, "render"), rf"^render outcome=slow .* attempts={attempts.MAX_ATTEMPTS} ")
 
     async def test_retries_a_challenge_that_appears_after_the_html(self):

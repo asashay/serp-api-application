@@ -160,3 +160,46 @@ test("preserves typed capture errors and normalizes framework errors", async () 
   assert.equal(body.error.code, "search_unavailable")
   assert.equal(body.request_id, broken.headers.get("x-request-id"))
 })
+
+test("logs the renderer's timing summary without forwarding it", async () => {
+  const summary = "render outcome=challenge attempts=5 total_ms=41000 | attempt 1 outcome=challenge challenge_at=load"
+  const logged = []
+  const original = console.log
+  console.log = (entry) => logged.push(entry)
+  try {
+    const response = await sender({
+      SEARCH_GATE: { getByName: () => ({ reserve: () => ({ retryAfter: 0, nextSearchAt: Date.now() }) }) },
+      RAILS: { getByName: () => ({ fetch: () => Response.json({ error: { code: "upstream_challenge" } }, {
+        status: 502, headers: { "X-Search-Response": "1", "X-Render-Log": summary },
+      }) }) },
+    })("/search.json?q=rails")
+
+    assert.equal(response.status, 502)
+    assert.equal(response.headers.get("X-Render-Log"), null)
+  } finally {
+    console.log = original
+  }
+  assert.equal(logged.length, 1)
+  assert.equal(logged[0].render, summary)
+  assert.equal(logged[0].status, 502)
+  assert.match(logged[0].request_id, /^[0-9a-f-]{36}$/)
+})
+
+test("logs an admitted search even when Rails sent no renderer summary", async () => {
+  const logged = []
+  const original = console.log
+  console.log = (entry) => logged.push(entry)
+  try {
+    await sender({
+      SEARCH_GATE: { getByName: () => ({ reserve: () => ({ retryAfter: 0, nextSearchAt: Date.now() }) }) },
+      RAILS: { getByName: () => ({ fetch: () => Response.json({ error: { code: "upstream_unavailable" } }, {
+        status: 503, headers: { "X-Search-Response": "1" },
+      }) }) },
+    })("/search.json?q=rails")
+  } finally {
+    console.log = original
+  }
+  assert.equal(logged.length, 1)
+  assert.equal(logged[0].status, 503)
+  assert.equal(logged[0].render, null)
+})
